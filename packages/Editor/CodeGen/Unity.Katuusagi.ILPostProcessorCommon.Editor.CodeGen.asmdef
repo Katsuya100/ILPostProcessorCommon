@@ -1,0 +1,23 @@
+{
+    "name": "Unity.Katuusagi.ILPostProcessorUtils.Editor.CodeGen",
+    "rootNamespace": "Katuusagi.ILPostProcessorCommon.Editor",
+    "references": [
+        "GUID:c70eb7601d69e4843a04844bb0c01de0"
+    ],
+    "includePlatforms": [
+        "Editor"
+    ],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": true,
+    "precompiledReferences": [
+        "Mono.Cecil.dll",
+        "Mono.Cecil.Mdb.dll",
+        "Mono.Cecil.Pdb.dll",
+        "Mono.Cecil.Rocks.dll"
+    ],
+    "autoReferenced": false,
+    "defineConstraints": [],
+    "versionDefines": [],
+    "noEngineReferences": false
+}
