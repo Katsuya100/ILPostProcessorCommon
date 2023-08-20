@@ -38,6 +38,24 @@ namespace Katuusagi.ILPostProcessorCommon
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public void CopyTo(T[] dst)
+        {
+            for (int i = 0; i < _array.Length && i < dst.Length; ++i)
+            {
+                dst[i] = _array[i];
+            }
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public void CopyTo(Span<T> dst)
+        {
+            for (int i = 0; i < _array.Length && i < dst.Length; ++i)
+            {
+                dst[i] = _array[i];
+            }
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public ReadOnlySpan<T> AsSpan()
         {
             return _array;
