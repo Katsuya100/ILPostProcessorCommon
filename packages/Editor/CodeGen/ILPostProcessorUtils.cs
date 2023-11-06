@@ -1,17 +1,27 @@
 using Mono.Cecil;
 using Mono.Cecil.Cil;
+using Mono.Cecil.Rocks;
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.IO;
 using System.Linq;
-using System.Reflection;
+using System.Runtime.CompilerServices;
+using Unity.CompilationPipeline.Common.Diagnostics;
 using Unity.CompilationPipeline.Common.ILPostProcessing;
 
 namespace Katuusagi.ILPostProcessorCommon.Editor
 {
     public static class ILPostProcessorUtils
     {
-        public static Logger Logger { get; set; }
+        [ThreadStatic]
+        private static Logger _logger;
+        public static Logger Logger => _logger;
+
+        public static void InitLog<T>(ICompiledAssembly assembly)
+        {
+            _logger = new Logger(typeof(T), assembly);
+        }
 
         public static AssemblyDefinition LoadAssemblyDefinition(ICompiledAssembly compiledAssembly)
         {
@@ -105,6 +115,18 @@ namespace Katuusagi.ILPostProcessorCommon.Editor
                 if (e.HandlerEnd == oldTarget)
                 {
                     e.HandlerEnd = newTarget;
+                }
+            }
+        }
+
+        public static IEnumerable<Type> GetAllTypes(this IEnumerable<Type> types)
+        {
+            foreach (var type in types)
+            {
+                yield return type;
+                foreach (var nested in type.GetNestedTypes().GetAllTypes())
+                {
+                    yield return nested;
                 }
             }
         }
@@ -225,7 +247,7 @@ namespace Katuusagi.ILPostProcessorCommon.Editor
             {
                 return Instruction.Create(OpCodes.Stelem_R8);
             }
-            if (elementType.IsClass || elementType.IsInterface)
+            if (!elementType.IsValueType)
             {
                 return Instruction.Create(OpCodes.Stelem_Ref);
             }
@@ -377,9 +399,9 @@ namespace Katuusagi.ILPostProcessorCommon.Editor
             return null;
         }
 
-        public static bool TryEmulateLiteral<T>(ref Instruction instruction, out T result)
+        public static bool TryGetConstValue<T>(ref Instruction instruction, out T result)
         {
-            if (TryEmulateLiteral(ref instruction, out object r) &&
+            if (TryGetConstValue(ref instruction, out object r) &&
                 r is T resultValue)
             {
                 result = resultValue;
@@ -390,9 +412,9 @@ namespace Katuusagi.ILPostProcessorCommon.Editor
             return false;
         }
 
-        public static bool TryEmulateLiteral(ref Instruction instruction, Type type, out object result)
+        public static bool TryGetConstValue(ref Instruction instruction, Type type, out object result)
         {
-            if (!TryEmulateLiteral(ref instruction, out result))
+            if (!TryGetConstValue(ref instruction, out result))
             {
                 return false;
             }
@@ -726,121 +748,123 @@ namespace Katuusagi.ILPostProcessorCommon.Editor
             return false;
         }
 
-        public static bool TryEmulateLiteral(ref Instruction instruction, out object result)
+        public static bool TryGetConstValue(ref Instruction instruction, out object result)
         {
-            if (instruction.OpCode == OpCodes.Ldstr)
+            var opCode = instruction.OpCode;
+            var operand = instruction.Operand;
+            if (opCode == OpCodes.Ldstr)
             {
-                if (instruction.Operand is string)
+                if (operand is string)
                 {
-                    result = instruction.Operand;
+                    result = operand;
                     return true;
                 }
 
-                result = instruction.Operand.ToString();
+                result = operand.ToString();
                 return true;
             }
-            if (instruction.OpCode == OpCodes.Ldc_I4_0)
+            if (opCode == OpCodes.Ldc_I4_0)
             {
                 result = 0;
                 return true;
             }
-            if (instruction.OpCode == OpCodes.Ldc_I4_1)
+            if (opCode == OpCodes.Ldc_I4_1)
             {
                 result = 1;
                 return true;
             }
-            if (instruction.OpCode == OpCodes.Ldc_I4_2)
+            if (opCode == OpCodes.Ldc_I4_2)
             {
                 result = 2;
                 return true;
             }
-            if (instruction.OpCode == OpCodes.Ldc_I4_3)
+            if (opCode == OpCodes.Ldc_I4_3)
             {
                 result = 3;
                 return true;
             }
-            if (instruction.OpCode == OpCodes.Ldc_I4_4)
+            if (opCode == OpCodes.Ldc_I4_4)
             {
                 result = 4;
                 return true;
             }
-            if (instruction.OpCode == OpCodes.Ldc_I4_5)
+            if (opCode == OpCodes.Ldc_I4_5)
             {
                 result = 5;
                 return true;
             }
-            if (instruction.OpCode == OpCodes.Ldc_I4_6)
+            if (opCode == OpCodes.Ldc_I4_6)
             {
                 result = 6;
                 return true;
             }
-            if (instruction.OpCode == OpCodes.Ldc_I4_7)
+            if (opCode == OpCodes.Ldc_I4_7)
             {
                 result = 7;
                 return true;
             }
-            if (instruction.OpCode == OpCodes.Ldc_I4_8)
+            if (opCode == OpCodes.Ldc_I4_8)
             {
                 result = 8;
                 return true;
             }
-            if (instruction.OpCode == OpCodes.Ldc_I4_M1)
+            if (opCode == OpCodes.Ldc_I4_M1)
             {
                 result = -1;
                 return true;
             }
-            if (instruction.OpCode == OpCodes.Ldc_I4_S || instruction.OpCode == OpCodes.Ldc_I4)
+            if (opCode == OpCodes.Ldc_I4_S || opCode == OpCodes.Ldc_I4)
             {
-                if (instruction.Operand is int)
+                if (operand is int)
                 {
-                    result = instruction.Operand;
+                    result = operand;
                     return true;
                 }
 
-                result = int.Parse(instruction.Operand.ToString());
+                result = int.Parse(operand.ToString());
                 return true;
             }
 
-            if (instruction.OpCode == OpCodes.Ldc_I8)
+            if (opCode == OpCodes.Ldc_I8)
             {
-                if (instruction.Operand is long)
+                if (operand is long)
                 {
-                    result = instruction.Operand;
+                    result = operand;
                     return true;
                 }
 
-                result = long.Parse(instruction.Operand.ToString());
+                result = long.Parse(operand.ToString());
                 return true;
             }
 
-            if (instruction.OpCode == OpCodes.Ldc_R4)
+            if (opCode == OpCodes.Ldc_R4)
             {
-                if (instruction.Operand is float)
+                if (operand is float)
                 {
-                    result = instruction.Operand;
+                    result = operand;
                     return true;
                 }
 
-                result = float.Parse(instruction.Operand.ToString());
+                result = float.Parse(operand.ToString());
                 return true;
             }
 
-            if (instruction.OpCode == OpCodes.Ldc_R8)
+            if (opCode == OpCodes.Ldc_R8)
             {
-                if (instruction.Operand is double)
+                if (operand is double)
                 {
-                    result = instruction.Operand;
+                    result = operand;
                     return true;
                 }
 
-                result = double.Parse(instruction.Operand.ToString());
+                result = double.Parse(operand.ToString());
                 return true;
             }
 
-            if (instruction.OpCode == OpCodes.Conv_I1)
+            if (opCode == OpCodes.Conv_I1)
             {
                 instruction = instruction.Previous;
-                if (!TryEmulateLiteral(ref instruction, out result))
+                if (!TryGetConstValue(ref instruction, out result))
                 {
                     return false;
                 }
@@ -867,10 +891,10 @@ namespace Katuusagi.ILPostProcessorCommon.Editor
                 }
             }
 
-            if (instruction.OpCode == OpCodes.Conv_I2)
+            if (opCode == OpCodes.Conv_I2)
             {
                 instruction = instruction.Previous;
-                if (!TryEmulateLiteral(ref instruction, out result))
+                if (!TryGetConstValue(ref instruction, out result))
                 {
                     return false;
                 }
@@ -897,10 +921,10 @@ namespace Katuusagi.ILPostProcessorCommon.Editor
                 }
             }
 
-            if (instruction.OpCode == OpCodes.Conv_I4)
+            if (opCode == OpCodes.Conv_I4)
             {
                 instruction = instruction.Previous;
-                if (!TryEmulateLiteral(ref instruction, out result))
+                if (!TryGetConstValue(ref instruction, out result))
                 {
                     return false;
                 }
@@ -927,10 +951,10 @@ namespace Katuusagi.ILPostProcessorCommon.Editor
                 }
             }
 
-            if (instruction.OpCode == OpCodes.Conv_I8)
+            if (opCode == OpCodes.Conv_I8)
             {
                 instruction = instruction.Previous;
-                if (!TryEmulateLiteral(ref instruction, out result))
+                if (!TryGetConstValue(ref instruction, out result))
                 {
                     return false;
                 }
@@ -957,18 +981,200 @@ namespace Katuusagi.ILPostProcessorCommon.Editor
                 }
             }
 
+            if (opCode == OpCodes.Ldloc_0)
+            {
+                var ret = TryGetLocalConstValue(instruction, OpCodes.Stloc_0, operand, out result);
+                return ret;
+            }
+
+            if (opCode == OpCodes.Ldloc_1)
+            {
+                var ret = TryGetLocalConstValue(instruction, OpCodes.Stloc_1, operand, out result);
+                return ret;
+            }
+
+            if (opCode == OpCodes.Ldloc_2)
+            {
+                var ret = TryGetLocalConstValue(instruction, OpCodes.Stloc_2, operand, out result);
+                return ret;
+            }
+
+            if (opCode == OpCodes.Ldloc_3)
+            {
+                var ret = TryGetLocalConstValue(instruction, OpCodes.Stloc_3, operand, out result);
+                return ret;
+            }
+
+            if (opCode == OpCodes.Ldloc_S)
+            {
+                var ret = TryGetLocalConstValue(instruction, OpCodes.Stloc_S, operand, out result);
+                return ret;
+            }
+
+            if (opCode == OpCodes.Ldloc)
+            {
+                var ret = TryGetLocalConstValue(instruction, OpCodes.Stloc, operand, out result);
+                return ret;
+            }
+
             result = null;
             return false;
         }
 
-        public static IEnumerable<MethodInfo> FindMethods<T>(Assembly assembly)
+        public static bool TryGetLocalConstValue(Instruction instruction, OpCode opCode, object operand, out object result)
+        {
+            var stloc = instruction.Previous;
+            while (stloc.OpCode != opCode || stloc.Operand != operand)
+            {
+                stloc = stloc.Previous;
+                if (stloc == null)
+                {
+                    result = null;
+                    return false;
+                }
+            }
+
+            var value = stloc.Previous;
+            var ret = TryGetConstValue(ref value, out result);
+            return ret;
+        }
+
+        public static bool TryGetConstInstructions(ref Instruction instruction, List<Instruction> result)
+        {
+            var opCode = instruction.OpCode;
+            if (opCode == OpCodes.Ldstr ||
+                opCode == OpCodes.Ldc_I4_0 ||
+                opCode == OpCodes.Ldc_I4_1 ||
+                opCode == OpCodes.Ldc_I4_2 ||
+                opCode == OpCodes.Ldc_I4_3 ||
+                opCode == OpCodes.Ldc_I4_4 ||
+                opCode == OpCodes.Ldc_I4_5 ||
+                opCode == OpCodes.Ldc_I4_6 ||
+                opCode == OpCodes.Ldc_I4_7 ||
+                opCode == OpCodes.Ldc_I4_8 ||
+                opCode == OpCodes.Ldc_I4_M1 ||
+                opCode == OpCodes.Ldc_I4_S ||
+                opCode == OpCodes.Ldc_I4 ||
+                opCode == OpCodes.Ldc_I8 ||
+                opCode == OpCodes.Ldc_R4 ||
+                opCode == OpCodes.Ldc_R8)
+            {
+                result.Add(instruction);
+                return true;
+            }
+
+            if (opCode == OpCodes.Conv_I1 ||
+                opCode == OpCodes.Conv_I2 ||
+                opCode == OpCodes.Conv_I4 ||
+                opCode == OpCodes.Conv_I8)
+            {
+                result.Add(instruction);
+                instruction = instruction.Previous;
+                if (!TryGetConstInstructions(ref instruction, result))
+                {
+                    return false;
+                }
+
+                return true;
+            }
+
+            if (opCode == OpCodes.Call)
+            {
+                var method = instruction.Operand as MethodReference;
+                if (method.FullName != "System.Type System.Type::GetTypeFromHandle(System.RuntimeTypeHandle)")
+                {
+                    return false;
+                }
+
+                result.Add(instruction);
+                instruction = instruction.Previous;
+                opCode = instruction.OpCode;
+                if (opCode != OpCodes.Ldtoken)
+                {
+                    return false;
+                }
+
+                result.Add(instruction);
+                return true;
+            }
+
+            if (opCode == OpCodes.Ldsfld)
+            {
+                var field = instruction.Operand as FieldReference;
+                var declaringTypeName = field.DeclaringType.Name;
+                if (declaringTypeName != "$$StaticTable" && declaringTypeName != "$$ConstTable")
+                {
+                    return false;
+                }
+
+                result.Add(instruction);
+                return true;
+            }
+
+            if (opCode == OpCodes.Ldloc_0)
+            {
+                var ret = TryGetLocalConstInstructions(instruction, OpCodes.Stloc_0, instruction.Operand, result);
+                return ret;
+            }
+
+            if (opCode == OpCodes.Ldloc_1)
+            {
+                var ret = TryGetLocalConstInstructions(instruction, OpCodes.Stloc_1, instruction.Operand, result);
+                return ret;
+            }
+
+            if (opCode == OpCodes.Ldloc_2)
+            {
+                var ret = TryGetLocalConstInstructions(instruction, OpCodes.Stloc_2, instruction.Operand, result);
+                return ret;
+            }
+
+            if (opCode == OpCodes.Ldloc_3)
+            {
+                var ret = TryGetLocalConstInstructions(instruction, OpCodes.Stloc_3, instruction.Operand, result);
+                return ret;
+            }
+
+            if (opCode == OpCodes.Ldloc_S)
+            {
+                var ret = TryGetLocalConstInstructions(instruction, OpCodes.Stloc_S, instruction.Operand, result);
+                return ret;
+            }
+
+            if (opCode == OpCodes.Ldloc)
+            {
+                var ret = TryGetLocalConstInstructions(instruction, OpCodes.Stloc, instruction.Operand, result);
+                return ret;
+            }
+
+            return false;
+        }
+
+        public static bool TryGetLocalConstInstructions(Instruction instruction, OpCode opCode, object operand, List<Instruction> result)
+        {
+            var stloc = instruction.Previous;
+            while (stloc.OpCode != opCode || stloc.Operand != operand)
+            {
+                stloc = stloc.Previous;
+                if (stloc == null)
+                {
+                    return false;
+                }
+            }
+
+            var value = stloc.Previous;
+            var ret = TryGetConstInstructions(ref value, result);
+            return ret;
+        }
+
+        public static IEnumerable<System.Reflection.MethodInfo> FindMethods<T>(System.Reflection.Assembly assembly)
             where T : Attribute
         {
             foreach (var type in assembly.GetTypes())
             {
                 foreach (var method in type.GetMethods())
                 {
-                    if (method.GetCustomAttribute<T>() == null)
+                    if (System.Reflection.CustomAttributeExtensions.GetCustomAttribute<T>(method) == null)
                     {
                         continue;
                     }
@@ -976,6 +1182,36 @@ namespace Katuusagi.ILPostProcessorCommon.Editor
                     yield return method;
                 }
             }
+        }
+
+        public static string GetMemberName(System.Reflection.MemberInfo member)
+        {
+            if (member is Type type)
+            {
+                return GetTypeName(type);
+            }
+
+            if (member is System.Reflection.MethodBase method)
+            {
+                return GetMethodName(method);
+            }
+
+            return $"{GetTypeName(member.ReflectedType)}.{member.Name}";
+        }
+
+        public static string GetMemberName(MemberReference member)
+        {
+            if (member is TypeReference type)
+            {
+                return GetTypeName(type);
+            }
+
+            if (member is MethodReference method)
+            {
+                return GetMethodName(method);
+            }
+
+            return $"{GetTypeName(member.DeclaringType)}.{member.Name}";
         }
 
         public static string GetTypeName(Type type)
@@ -992,7 +1228,48 @@ namespace Katuusagi.ILPostProcessorCommon.Editor
                 string parentName;
                 if (type.ReflectedType != null)
                 {
-                    parentName = $"{GetTypeName(type)}/";
+                    parentName = $"{GetTypeName(type.ReflectedType)}/";
+                }
+                else
+                {
+                    parentName = $"{type.Namespace}.";
+                }
+
+                return $"{parentName}{type.Name}<{generic}>";
+            }
+
+            if (type.FullName == null)
+            {
+                return type.Name;
+            }
+            return type.FullName.Replace("+", "/");
+        }
+
+        public static string GetTypeName(TypeReference type)
+        {
+            IEnumerable<TypeReference> genericArguments = null;
+            if (type is GenericInstanceType genType)
+            {
+                genericArguments = genType.GenericArguments;
+            }
+            else if (type.HasGenericParameters)
+            {
+                genericArguments = type.GenericParameters;
+            }
+
+            if (genericArguments?.Any() ?? false)
+            {
+                string generic = string.Empty;
+                foreach (var arg in genericArguments)
+                {
+                    generic += $"{GetTypeName(arg)},";
+                }
+                generic = generic.Remove(generic.Length - 1, 1);
+
+                string parentName;
+                if (type.DeclaringType != null)
+                {
+                    parentName = $"{GetTypeName(type.DeclaringType)}/";
                 }
                 else
                 {
@@ -1005,7 +1282,7 @@ namespace Katuusagi.ILPostProcessorCommon.Editor
             return type.FullName.Replace("+", "/");
         }
 
-        public static string GetMethodName(MethodInfo method)
+        public static string GetMethodName(System.Reflection.MethodBase method)
         {
             string parameters = string.Empty;
             if (method.GetParameters().Any())
@@ -1014,12 +1291,12 @@ namespace Katuusagi.ILPostProcessorCommon.Editor
                 {
                     parameters += $"{arg.ParameterType.Name},";
                 }
+                parameters = parameters.Remove(parameters.Length - 1, 1);
             }
-            parameters = parameters.Remove(parameters.Length - 1, 1);
-            return $"{method.ReflectedType.FullName}.{method.Name}({parameters})";
+            return $"{GetTypeName(method.ReflectedType)}.{method.Name}({parameters})";
         }
 
-        public static string GetMethodName(MethodDefinition method)
+        public static string GetMethodName(MethodReference method)
         {
             string parameters = string.Empty;
             if (method.Parameters.Any())
@@ -1030,7 +1307,7 @@ namespace Katuusagi.ILPostProcessorCommon.Editor
                 }
                 parameters = parameters.Remove(parameters.Length - 1, 1);
             }
-            return $"{method.DeclaringType.FullName}.{method.Name}({parameters})";
+            return $"{GetTypeName(method.DeclaringType)}.{method.Name}({parameters})";
         }
 
         public static bool IsStructRecursive(Type type)
@@ -1040,12 +1317,39 @@ namespace Katuusagi.ILPostProcessorCommon.Editor
                 return true;
             }
 
-            if (type.IsClass || type.IsInterface)
+            if (!type.IsValueType)
             {
                 return false;
             }
 
-            var fields = type.GetFields(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance);
+            var fields = type.GetFields( System.Reflection.BindingFlags.Public |  System.Reflection.BindingFlags.NonPublic |  System.Reflection.BindingFlags.Instance);
+            return fields.Select(v => v.FieldType).All(IsStructRecursive);
+        }
+
+        public static bool IsStructRecursive(this TypeReference self)
+        {
+            if (self.IsPrimitive)
+            {
+                return true;
+            }
+
+            var type = self.Resolve();
+            if (type == null)
+            {
+                return false;
+            }
+
+            if (type.IsEnum)
+            {
+                return true;
+            }
+
+            if (!type.IsValueType)
+            {
+                return false;
+            }
+
+            var fields = self.GetFields().Where(v => !v.IsStatic);
             return fields.Select(v => v.FieldType).All(IsStructRecursive);
         }
 
@@ -1066,59 +1370,433 @@ namespace Katuusagi.ILPostProcessorCommon.Editor
             return funcType.MakeGenericType(args.Append(ret).ToArray());
         }
 
+        public static MethodReference MakeGenericInstanceMethod(this MethodReference method, IEnumerable<TypeReference> arguments)
+        {
+            var genericInstanceMethod = new GenericInstanceMethod(method);
+            foreach (TypeReference item in arguments)
+            {
+                genericInstanceMethod.GenericArguments.Add(item);
+            }
+            return genericInstanceMethod;
+        }
+
+        public static IEnumerable<TypeReference> GetGenericArguments(this MethodReference methodRef)
+        {
+            if (!(methodRef is GenericInstanceMethod genMethod))
+            {
+                return Array.Empty<TypeReference>();
+            }
+
+            return genMethod.GenericArguments;
+        }
+
+        public static IEnumerable<TypeReference> GetGenericArguments(this TypeReference typeRef)
+        {
+            if (!(typeRef is GenericInstanceType genType))
+            {
+                return Array.Empty<TypeReference>();
+            }
+
+            return genType.GenericArguments;
+        }
+
+        public static IEnumerable<TypeReference> GetNestedTypes(this TypeReference typeRef, TypeDefinition type)
+        {
+            if (!(typeRef is GenericInstanceType genType))
+            {
+                return type.NestedTypes;
+            }
+
+            var genArgs = genType.GenericArguments.ToArray();
+            return type.NestedTypes.Where(v => v.GenericParameters.Count == genArgs.Length)
+                                      .Select(v2 => v2.GetElementType().MakeGenericInstanceType(genArgs))
+                                      .OfType<TypeReference>();
+        }
+
+        public static TypeReference GetDeclairingType(this TypeReference typeRef)
+        {
+            if (typeRef.DeclaringType == null)
+            {
+                return null;
+            }
+
+            if (!(typeRef is GenericInstanceType genType))
+            {
+                return typeRef.DeclaringType;
+            }
+
+            if (!(typeRef is TypeDefinition type))
+            {
+                type = typeRef.Resolve();
+            }
+
+            var declairingType = type.DeclaringType.GetElementType();
+            var genArgs = genType.GenericArguments;
+            var declairingGenArgs = genArgs.Take(declairingType.GenericParameters.Count).ToArray();
+            if (!declairingGenArgs.Any())
+            {
+                return typeRef.DeclaringType;
+            }
+
+            return declairingType.MakeGenericInstanceType(declairingGenArgs);
+        }
+
+        public static IEnumerable<FieldDefinition> GetFields(this TypeReference self, Func<FieldReference, bool> func = null)
+        {
+            if (self is GenericInstanceType genType)
+            {
+                return genType.GetFields();
+            }
+
+            if (!(self is TypeDefinition type))
+            {
+                type = self.Resolve();
+            }
+
+            if (type == null)
+            {
+                return null;
+            }
+
+            return type.Fields;
+        }
+
+        public static FieldDefinition[] GetFields(this GenericInstanceType self)
+        {
+            var type = self.Resolve();
+            if (type == null)
+            {
+                return null;
+            }
+
+            var fields = type.Fields;
+            var result = new FieldDefinition[fields.Count];
+            for (int i = 0; i < result.Length; ++i)
+            {
+                var field = fields[i];
+                var fieldType = field.FieldType;
+                if (!self.TryReplaceGenericParameter(fieldType, out fieldType))
+                {
+                    result[i] = field;
+                    continue;
+                }
+
+                var newField = field.Clone();
+                newField.FieldType = fieldType;
+                result[i] = newField;
+            }
+
+            return result;
+        }
+
+        public static bool TryReplaceGenericParameter(this GenericInstanceType typeRef, TypeReference src, out TypeReference result)
+        {
+            result = src;
+            if (src.IsGenericParameter)
+            {
+                var arguments = typeRef.GenericArguments;
+                var parameters = typeRef.ElementType.GenericParameters;
+                var data = parameters
+                            .Select((p, i) => (p, i))
+                            .FirstOrDefault(v => TypeReferenceComparer.Default.Equals(v.p, src));
+                if (data.p == null)
+                {
+                    return false;
+                }
+
+                result = arguments[data.i];
+                return true;
+            }
+
+            if (src.ContainsGenericParameter &&
+                src is GenericInstanceType genType)
+            {
+                bool isReplaced = false;
+                var genArgs = new TypeReference[genType.GenericArguments.Count];
+                for (int i = 0; i < genArgs.Length; ++i)
+                {
+                    if (typeRef.TryReplaceGenericParameter(genType.GenericArguments[i], out genArgs[i]))
+                    {
+                        isReplaced = true;
+                    }
+                }
+
+                if (!isReplaced)
+                {
+                    return false;
+                }
+
+                result = genType.DeclaringType.MakeGenericInstanceType(genArgs);
+                return true;
+            }
+
+            return false;
+        }
+
+        public static bool IsVolatile(this System.Reflection.FieldInfo field)
+        {
+            return field.GetRequiredCustomModifiers().Contains(typeof(IsVolatile));
+        }
+
+        public static bool IsVolatile(this FieldReference self)
+        {
+            return (self.FieldType is RequiredModifierType modType &&
+                    modType.ModifierType.FullName == "System.Runtime.CompilerServices.IsVolatile");
+        }
+
+        public static TypeReference GetForceInstancedGenericType(this TypeReference self)
+        {
+            if (!IsGenericDefinition(self))
+            {
+                return self;
+            }
+
+            return self.MakeGenericInstanceType(self.GenericParameters.ToArray());
+        }
+
+        public static TypeReference ResolveVirtualElementType(this TypeReference self)
+        {
+            if (!(self is GenericInstanceType genType))
+            {
+                return self;
+            }
+
+            var type = genType.ElementType;
+            if (!type.GenericParameters.SequenceEqual(genType.GenericArguments, TypeReferenceComparer.Default))
+            {
+                return self;
+            }
+
+            return type;
+        }
+
+        public static MethodReference ResolveVirtualElementMethod(this MethodReference self)
+        {
+            if (!(self is GenericInstanceMethod genMethod))
+            {
+                return self;
+            }
+
+            var method = genMethod.ElementMethod;
+            if (!method.GenericParameters.SequenceEqual(genMethod.GenericArguments, TypeReferenceComparer.Default))
+            {
+                return self;
+            }
+
+            return method;
+        }
+
+        public static bool IsGenericDefinition(this TypeReference self)
+        {
+            return self.HasGenericParameters && !self.IsGenericInstance;
+        }
+
+        public static bool IsGenericDefinition(this MethodReference self)
+        {
+            return self.HasGenericParameters && !self.IsGenericInstance;
+        }
+
+        public static bool IsEnum(this TypeReference self)
+        {
+            var type = self.Resolve();
+            if (type == null)
+            {
+                return false;
+            }
+
+            return type.IsEnum;
+        }
+
+        public static bool IsString(this TypeReference self)
+        {
+            var result = self.FullName == "System.String";
+            return result;
+        }
+
+        public static int GetHashCode_(this TypeReference self)
+        {
+            return TypeReferenceComparer.Default.GetHashCode(self);
+        }
+
+        public static int GetHashCode_(this MethodReference self)
+        {
+            return MethodReferenceComparer.Default.GetHashCode(self);
+        }
+
+        public static int GetHashCode_(this FieldReference self)
+        {
+            return FieldReferenceComparer.Default.GetHashCode(self);
+        }
+
+        public static int GetHashCode_(this PropertyReference self)
+        {
+            return PropertyReferenceComparer.Default.GetHashCode(self);
+        }
+
+        public static int GetHashCode_(this EventReference self)
+        {
+            return EventReferenceComparer.Default.GetHashCode(self);
+        }
+
+        public static bool Is(this TypeReference self, TypeReference cmp)
+        {
+            return TypeReferenceComparer.Default.Equals(self, cmp);
+        }
+
+        public static bool Is(this MethodReference self, MethodReference cmp)
+        {
+            return MethodReferenceComparer.Default.Equals(self, cmp);
+        }
+
+        public static bool Is(this FieldReference self, FieldReference cmp)
+        {
+            return FieldReferenceComparer.Default.Equals(self, cmp);
+        }
+
+        public static bool Is(this PropertyReference self, PropertyReference cmp)
+        {
+            return PropertyReferenceComparer.Default.Equals(self, cmp);
+        }
+
+        public static bool Is(this EventReference self, EventReference cmp)
+        {
+            return EventReferenceComparer.Default.Equals(self, cmp);
+        }
+
+        public static Instruction Clone(this Instruction self)
+        {
+            var result = Instruction.Create(OpCodes.Nop);
+            result.OpCode = self.OpCode;
+            result.Operand = self.Operand;
+            return result;
+        }
+
+        public static FieldDefinition Clone(this FieldDefinition self)
+        {
+            var cloned = new FieldDefinition(self.Name, self.Attributes, self.FieldType);
+            cloned.DeclaringType = self.DeclaringType;
+            cloned.MetadataToken = self.MetadataToken;
+
+            foreach (var a in self.CustomAttributes)
+            {
+                cloned.CustomAttributes.Add(a);
+            }
+
+            cloned.Offset = self.Offset;
+            cloned.InitialValue = self.InitialValue;
+            cloned.Constant = self.Constant;
+            cloned.MarshalInfo = self.MarshalInfo;
+            return cloned;
+        }
+
+        public static void Log(object o)
+        {
+            Logger.Log(0, o);
+        }
+
+        public static void Log(object o, MethodDefinition method, Instruction instruction)
+        {
+            Logger.Log(0, o, method, instruction);
+        }
+
+        public static void Log(object o, MemberReference member)
+        {
+            Logger.Log(0, o, member);
+        }
+
+        public static void Log(object o, System.Reflection.MemberInfo member)
+        {
+            Logger.Log(0, o, member);
+        }
+
+        public static void Log(object o, SequencePoint point)
+        {
+            Logger.Log(0, o, point);
+        }
+
+        public static void Log(object o, StackFrame frame)
+        {
+            Logger.Log(0, o, frame);
+        }
+
+        public static void Log(object o, string file, int line, int column)
+        {
+            Logger.Log(0, o, file, line, column);
+        }
+
         public static void LogWarning(object o)
         {
-            Logger.LogWarning(o);
+            Logger.Log(DiagnosticType.Warning, o);
         }
 
         public static void LogWarning(object o, MethodDefinition method, Instruction instruction)
         {
-            Logger.LogWarning(o, method, instruction);
+            Logger.Log(DiagnosticType.Warning, o, method, instruction);
         }
 
-        public static void LogWarning(object o, MethodInfo method)
+        public static void LogWarning(object o, MemberReference member)
         {
-            Logger.LogWarning(o, method);
+            Logger.Log(DiagnosticType.Warning, o, member);
         }
 
-        public static void LogWarning(object o, string stacktrace)
+        public static void LogWarning(object o, System.Reflection.MemberInfo member)
         {
-            Logger.LogWarning(o, stacktrace);
+            Logger.Log(DiagnosticType.Warning, o, member);
+        }
+
+        public static void LogWarning(object o, SequencePoint point)
+        {
+            Logger.Log(DiagnosticType.Warning, o, point);
+        }
+
+        public static void LogWarning(object o, StackFrame frame)
+        {
+            Logger.Log(DiagnosticType.Warning, o, frame);
         }
 
         public static void LogWarning(object o, string file, int line, int column)
         {
-            Logger.LogWarning(o, file, line, column);
+            Logger.Log(DiagnosticType.Warning, o, file, line, column);
         }
 
         public static void LogError(object o)
         {
-            Logger.LogError(o);
+            Logger.Log(DiagnosticType.Error, o);
         }
 
         public static void LogError(object o, MethodDefinition method, Instruction instruction)
         {
-            Logger.LogError(o, method, instruction);
+            Logger.Log(DiagnosticType.Error, o, method, instruction);
         }
 
-        public static void LogError(object o, MethodInfo method)
+        public static void LogError(object o, MemberReference member)
         {
-            Logger.LogError(o, method);
+            Logger.Log(DiagnosticType.Error, o, member);
         }
 
-        public static void LogError(object o, string stacktrace)
+        public static void LogError(object o, System.Reflection.MemberInfo member)
         {
-            Logger.LogError(o, stacktrace);
+            Logger.Log(DiagnosticType.Error, o, member);
+        }
+
+        public static void LogError(object o, SequencePoint point)
+        {
+            Logger.Log(DiagnosticType.Error, o, point);
+        }
+
+        public static void LogError(object o, StackFrame frame)
+        {
+            Logger.Log(DiagnosticType.Error, o, frame);
         }
 
         public static void LogError(object o, string file, int line, int column)
         {
-            Logger.LogError(o, file, line, column);
+            Logger.Log(DiagnosticType.Error, o, file, line, column);
         }
 
         public static void LogException(Exception e)
         {
-            Logger.LogException(e);
+            Logger.Log(DiagnosticType.Error, e);
         }
 
         public static OpCode SwitchShortOpCode(OpCode opCode)

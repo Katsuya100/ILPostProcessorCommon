@@ -5,53 +5,21 @@ using Mono.Collections.Generic;
 using System;
 using System.Collections;
 using System.Collections.Generic;
-using System.Linq;
 using System.Runtime.InteropServices;
+using Unity.Collections.LowLevel.Unsafe;
 
 namespace Katuusagi.ILPostProcessorCommon.Editor
 {
     public class ConstTableGenerator : IDisposable
     {
-        private Dictionary<object, FieldReference> _constFields = new Dictionary<object, FieldReference>(new FieldsComparer());
+        private class CopyObject
+        {
+            public byte First;
+        }
+
+        private Dictionary<object, FieldReference> _constFields = new Dictionary<object, FieldReference>(LiteralComparer.Default);
         private TypeDefinition _constTableType;
         private MethodDefinition _constTableConstructor;
-
-        private class FieldsComparer : IEqualityComparer<object>
-        {
-            bool IEqualityComparer<object>.Equals(object x, object y)
-            {
-                if (x.GetType() != y.GetType())
-                {
-                    return false;
-                }
-
-                if (x is IReadOnlyArray xe &&
-                    y is IReadOnlyArray ye)
-                {
-                    return xe.Cast<object>().SequenceEqual(ye.Cast<object>());
-                }
-
-                return x.Equals(y);
-            }
-
-            int IEqualityComparer<object>.GetHashCode(object obj)
-            {
-                if (!(obj is IReadOnlyArray oe))
-                {
-                    return obj.GetHashCode();
-                }
-
-                const int prime = 31;
-                int hash = 1;
-
-                foreach (object o in oe)
-                {
-                    hash = hash * prime + o.GetHashCode();
-                }
-
-                return hash;
-            }
-        }
 
         public ConstTableGenerator(ModuleDefinition module, string @namespace, string @class)
         {
@@ -86,7 +54,7 @@ namespace Katuusagi.ILPostProcessorCommon.Editor
             if (constantValue != null)
             {
                 var valueType = constantValue.GetType();
-                if (!valueType.IsClass && !valueType.IsInterface)
+                if (valueType.IsValueType)
                 {
                     var field = GetStructField(constantValue);
                     return Instruction.Create(OpCodes.Ldsfld, field);
@@ -112,31 +80,31 @@ namespace Katuusagi.ILPostProcessorCommon.Editor
             return GetField(obj, (o, objType, field, instructions) =>
             {
                 int size = Marshal.SizeOf(o);
-                byte[] array = new byte[size];
-                IntPtr ptr = Marshal.AllocHGlobal(size);
-                Marshal.StructureToPtr(o, ptr, false);
-                Marshal.Copy(ptr, array, 0, size);
-                Marshal.FreeHGlobal(ptr);
-
-                // 静的コンストラクタに初期化処理を書く
-                instructions.Add(ILPostProcessorUtils.LoadLiteral(array.Length));
-                instructions.Add(Instruction.Create(OpCodes.Conv_U));
-                instructions.Add(Instruction.Create(OpCodes.Localloc));
-                instructions.Add(Instruction.Create(OpCodes.Dup));
-                instructions.Add(ILPostProcessorUtils.LoadLiteral(array[0]));
-                instructions.Add(Instruction.Create(OpCodes.Stind_I1));
-
-                for (int i = 1; i < array.Length; ++i)
+                ref var b = ref UnsafeUtility.As<object, CopyObject>(ref o);
+                unsafe
                 {
-                    instructions.Add(Instruction.Create(OpCodes.Dup));
-                    instructions.Add(ILPostProcessorUtils.LoadLiteral(i));
-                    instructions.Add(Instruction.Create(OpCodes.Add));
-                    instructions.Add(ILPostProcessorUtils.LoadLiteral(array[i]));
-                    instructions.Add(Instruction.Create(OpCodes.Stind_I1));
-                }
+                    var array = (byte*)UnsafeUtility.AddressOf(ref b.First);
 
-                instructions.Add(Instruction.Create(OpCodes.Ldobj, objType));
-                instructions.Add(Instruction.Create(OpCodes.Stsfld, field));
+                    // 静的コンストラクタに初期化処理を書く
+                    instructions.Add(ILPostProcessorUtils.LoadLiteral(size));
+                    instructions.Add(Instruction.Create(OpCodes.Conv_U));
+                    instructions.Add(Instruction.Create(OpCodes.Localloc));
+                    instructions.Add(Instruction.Create(OpCodes.Dup));
+                    instructions.Add(ILPostProcessorUtils.LoadLiteral(array[0]));
+                    instructions.Add(Instruction.Create(OpCodes.Stind_I1));
+
+                    for (int i = 1; i < size; ++i)
+                    {
+                        instructions.Add(Instruction.Create(OpCodes.Dup));
+                        instructions.Add(ILPostProcessorUtils.LoadLiteral(i));
+                        instructions.Add(Instruction.Create(OpCodes.Add));
+                        instructions.Add(ILPostProcessorUtils.LoadLiteral(array[i]));
+                        instructions.Add(Instruction.Create(OpCodes.Stind_I1));
+                    }
+
+                    instructions.Add(Instruction.Create(OpCodes.Ldobj, objType));
+                    instructions.Add(Instruction.Create(OpCodes.Stsfld, field));
+                }
             });
         }
 

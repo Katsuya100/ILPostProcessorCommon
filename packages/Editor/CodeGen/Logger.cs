@@ -2,37 +2,149 @@ using Mono.Cecil;
 using Mono.Cecil.Cil;
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
+using System.IO;
 using System.Linq;
 using System.Reflection;
-using System.Text.RegularExpressions;
 using Unity.CompilationPipeline.Common.Diagnostics;
+using Unity.CompilationPipeline.Common.ILPostProcessing;
 
 namespace Katuusagi.ILPostProcessorCommon.Editor
 {
     public class Logger
     {
-        private static readonly Regex StackTraceCheck = new Regex("at .*\\(.*\\) in .*\\:line [0-9]{1,}");
-        private static readonly Regex StackTracePrefix = new Regex("at .*\\(.*\\) in ");
-        private static readonly Regex StackTraceSuffix = new Regex(" in .*\\:line [0-9]{1,}");
+        private static readonly string CurrentPath = $"{Environment.CurrentDirectory.Replace("\\", "/")}/";
 
+        private string _logPath;
         private List<DiagnosticMessage> _messages = new List<DiagnosticMessage>();
         public List<DiagnosticMessage> Messages => _messages;
 
-        public void Clear()
+        public Logger(Type type, ICompiledAssembly assembly)
         {
-            _messages.Clear();
-        }
-
-        public void LogWarning(object o)
-        {
-            _messages.Add(new DiagnosticMessage()
+            _logPath = $"Logs/{type.Name}/{assembly.Name}.txt";
+            var dir = Path.GetDirectoryName(_logPath);
+            if (!Directory.Exists(dir))
             {
-                DiagnosticType = DiagnosticType.Warning,
-                MessageData = $"{o}",
-            });
+                Directory.CreateDirectory(dir);
+            }
+            File.Open(_logPath, FileMode.Create, FileAccess.Write, FileShare.Read).Dispose();
         }
 
-        public void LogWarning(object o, MethodDefinition method, Instruction instruction)
+        private void LogInternal(DiagnosticType type, object o, string file, int line, int column, string stacktrace)
+        {
+            file = file.Replace("\\", "/").Replace(CurrentPath, string.Empty).Trim();
+            var logType = type == 0 ? string.Empty : $"{type} ";
+            var log = $"{file}({line},{column}):{logType}{o}\n{stacktrace}";
+            using (var f = File.AppendText(_logPath))
+            {
+                f.WriteLine(log);
+            }
+
+            Console.WriteLine(log);
+
+            if (type != 0)
+            {
+                _messages.Add(new DiagnosticMessage()
+                {
+                    DiagnosticType = type,
+                    MessageData = $"{o}",
+                    File = file,
+                    Line = line,
+                    Column = column,
+                });
+            }
+        }
+
+        private void LogInternal(DiagnosticType type, object o, IEnumerable<(string file, string method, int line)> frames)
+        {
+            var useFrames = TrimStack(frames);
+            var stackLog = FormatStack(useFrames);
+
+            var frame = useFrames.FirstOrDefault(v => !string.IsNullOrEmpty(v.file));
+            var file = frame.file;
+            var line = frame.line;
+            var column = 0;
+
+            LogInternal(type, o, file, line, column, stackLog);
+        }
+
+        private void LogInternal(DiagnosticType type, object o, IEnumerable<StackFrame> frames)
+        {
+            var useFrames = TrimStack(frames);
+            var stackLog = FormatStack(useFrames);
+
+            var frame = useFrames.FirstOrDefault(v => !string.IsNullOrEmpty(v.GetFileName()));
+            var file = frame?.GetFileName() ?? string.Empty;
+            var line = frame?.GetFileLineNumber() ?? 0;
+            var column = frame?.GetFileColumnNumber() ?? 0;
+
+            LogInternal(type, o, file, line, column, stackLog);
+        }
+
+        private void LogInternal(DiagnosticType type, object o, string file, int line, int column, IEnumerable<StackFrame> frames)
+        {
+            var useFrames = TrimStack(frames);
+            var stackLog = FormatStack(useFrames);
+            LogInternal(type, o, file, line, column, stackLog);
+        }
+
+        private void LogInternal(DiagnosticType type, object o, string file, int line, int column, IEnumerable<(string file, string method, int line)> frames)
+        {
+            var useFrames = TrimStack(frames);
+            var stackLog = FormatStack(useFrames);
+            LogInternal(type, o, file, line, column, stackLog);
+        }
+
+        private void LogInternal(DiagnosticType type, object o)
+        {
+            var stack = new StackTrace(true);
+            var frames = stack.GetFrames();
+            LogInternal(type, o, frames);
+        }
+
+        private void LogInternal(DiagnosticType type, object o, string file, int line, int column)
+        {
+            var stack = new StackTrace(true);
+            var frames = stack.GetFrames();
+            LogInternal(type, o, file, line, column, frames);
+        }
+
+        private void LogInternal(DiagnosticType type, object o, string target)
+        {
+            LogInternal(type, $"{o}  at {target}");
+        }
+
+        private void LogInternal(DiagnosticType type, object o, string target, string file, int line, int column)
+        {
+            LogInternal(type, $"{o}  at {target}", file, line, column);
+        }
+
+        private void LogInternal(DiagnosticType type, object o, MemberReference member)
+        {
+            LogInternal(type, o, ILPostProcessorUtils.GetMemberName(member));
+        }
+
+        private void LogInternal(DiagnosticType type, object o, MemberReference member, string file, int line, int column)
+        {
+            LogInternal(type, o, ILPostProcessorUtils.GetMemberName(member), file, line, column);
+        }
+
+        private void LogInternal(DiagnosticType type, object o, MemberInfo member)
+        {
+            LogInternal(type, o, ILPostProcessorUtils.GetMemberName(member));
+        }
+
+        private void LogInternal(DiagnosticType type, object o, MemberInfo member, string file, int line, int column)
+        {
+            LogInternal(type, o, ILPostProcessorUtils.GetMemberName(member), file, line, column);
+        }
+
+        public void Log(DiagnosticType type, object o)
+        {
+            LogInternal(type, o);
+        }
+
+        public void Log(DiagnosticType type, object o, MethodDefinition method, Instruction instruction)
         {
             SequencePoint point = null;
             for (var it = instruction; it != null && point == null; it = it.Previous)
@@ -42,120 +154,198 @@ namespace Katuusagi.ILPostProcessorCommon.Editor
 
             if (point == null)
             {
-                LogWarning($"{o}  at {ILPostProcessorUtils.GetMethodName(method)}");
+                LogInternal(type, o, method, string.Empty, 0, 0);
                 return;
             }
 
-            var file = point.Document.Url.Replace("\\", "/");
-            file = file.Remove(0, file.IndexOf("/Assets/") + 1);
-            LogWarning($"{o}", file, point.StartLine, point.StartColumn);
+            Log(type, o, point);
         }
 
-        public void LogWarning(object o, MethodInfo method)
+        public void Log(DiagnosticType type, Exception e)
         {
-            LogWarning($"{o}  at {ILPostProcessorUtils.GetMethodName(method)}");
+            Log(type, $"{e.GetType()}:{e.Message}", e.StackTrace);
         }
 
-        public void LogWarning(object o, string stacktrace)
+        public void Log(DiagnosticType type, object o, MemberInfo member)
+        {
+            LogInternal(type, o, member, string.Empty, 0, 0);
+        }
+
+        public void Log(DiagnosticType type, object o, MemberReference member)
+        {
+            MethodDefinition method = null;
+            if (member is MethodReference methodRef)
+            {
+                if (!(member is MethodDefinition methodTmp))
+                {
+                    methodTmp = methodRef.Resolve();
+                }
+
+                method = methodTmp;
+            }
+            else if (member is PropertyReference propertyRef)
+            {
+                if (!(propertyRef is PropertyDefinition property))
+                {
+                    property = propertyRef.Resolve();
+                }
+
+                method = property?.GetMethod ?? property?.SetMethod;
+            }
+
+            if (method != null)
+            {
+                var point = method.DebugInformation.SequencePoints.FirstOrDefault();
+                if (point != null)
+                {
+                    Log(type, o, point);
+                    return;
+                }
+            }
+
+            LogInternal(type, o, member, string.Empty, 0, 0);
+        }
+
+        public void Log(DiagnosticType type, object o, string stacktrace)
         {
             var splitedStackTraces = stacktrace.Split('\n');
-            stacktrace = splitedStackTraces.FirstOrDefault(v => StackTraceCheck.IsMatch(v));
-            if (stacktrace == null)
-            {
-                stacktrace = splitedStackTraces.FirstOrDefault();
-                LogWarning($"{o}{stacktrace}");
-                return;
-            }
-
-            var method = StackTraceSuffix.Replace(stacktrace, string.Empty);
-            stacktrace = StackTracePrefix.Replace(stacktrace, string.Empty);
-            var traceElements = stacktrace.Split(":line ");
-            var file = traceElements[0].Replace("\\", "/");
-            file = file.Remove(0, file.IndexOf("/Assets/") + 1);
-            int.TryParse(traceElements[1], out var line);
-            LogWarning($"{o}{method}", file, line, 0);
+            var stackframes = splitedStackTraces.Select(Parse);
+            LogInternal(type, o, stackframes);
         }
 
-        public void LogWarning(object o, string file, int line, int column)
+        public void Log(DiagnosticType type, object o, SequencePoint point)
         {
-            _messages.Add(new DiagnosticMessage()
-            {
-                DiagnosticType = DiagnosticType.Warning,
-                MessageData = o.ToString(),
-                File = file,
-                Line = line,
-                Column = column,
-            });
-        }
-
-        public void LogError(object o)
-        {
-            _messages.Add(new DiagnosticMessage()
-            {
-                DiagnosticType = DiagnosticType.Error,
-                MessageData = $"{o}",
-            });
-        }
-
-        public void LogError(object o, MethodDefinition method, Instruction instruction)
-        {
-            SequencePoint point = null;
-            for (var it = instruction; it != null && point == null; it = it.Previous)
-            {
-                point = method.DebugInformation.GetSequencePoint(it);
-            }
-
             if (point == null)
             {
-                LogError($"{o}  at {ILPostProcessorUtils.GetMethodName(method)}");
+                LogInternal(type, o, string.Empty, 0, 0);
                 return;
             }
 
-            var file = point.Document.Url.Replace("\\", "/");
-            file = file.Remove(0, file.IndexOf("/Assets/") + 1);
-            LogError($"{o}", file, point.StartLine, point.StartColumn);
+            var fileName = point.Document.Url;
+            var line = point.StartLine;
+            var column = point.StartColumn;
+            LogInternal(type, o, fileName, line, column);
         }
 
-        public void LogError(object o, MethodInfo method)
+        public void Log(DiagnosticType type, object o, StackFrame frame)
         {
-            LogError($"{o}  at {ILPostProcessorUtils.GetMethodName(method)}");
-        }
-
-        public void LogError(object o, string stacktrace)
-        {
-            var splitedStackTraces = stacktrace.Split('\n');
-            stacktrace = splitedStackTraces.FirstOrDefault(v => StackTraceCheck.IsMatch(v));
-            if (stacktrace == null)
+            if (frame == null)
             {
-                stacktrace = splitedStackTraces.FirstOrDefault();
-                LogError($"{o}{stacktrace}");
+                LogInternal(type, o, string.Empty, 0, 0);
                 return;
             }
 
-            var method = StackTraceSuffix.Replace(stacktrace, string.Empty);
-            stacktrace = StackTracePrefix.Replace(stacktrace, string.Empty);
-            var traceElements = stacktrace.Split(":line ");
-            var file = traceElements[0].Replace("\\", "/");
-            file = file.Remove(0, file.IndexOf("/Assets/") + 1);
-            int.TryParse(traceElements[1], out var line);
-            LogError($"{o}{method}", file, line, 0);
+            var fileName = frame.GetFileName();
+            var line = frame.GetFileLineNumber();
+            var column = frame.GetFileColumnNumber();
+            LogInternal(type, o, fileName, line, column);
         }
 
-        public void LogError(object o, string file, int line, int column)
+        public void Log(DiagnosticType type, object o, string file, int line, int column)
         {
-            _messages.Add(new DiagnosticMessage()
+            LogInternal(type, o, file, line, column);
+        }
+
+        private static IEnumerable<StackFrame> TrimStack(IEnumerable<StackFrame> frames)
+        {
+            var indices = frames.Select((v, i) => (v, i));
+            var firstIndex = indices.FirstOrDefault(v => !IsLogMethod(v.v)).i;
+            var lastIndex = indices.FirstOrDefault(v => IsILPostProcessorRoot(v.v)).i;
+            var result = frames.Take(lastIndex + 1).Skip(firstIndex);
+            return result;
+        }
+
+        private static IEnumerable<(string file, string method, int line)> TrimStack(IEnumerable<(string file, string method, int line)> frames)
+        {
+            var indices = frames.Select((v, i) => (v, i));
+            var firstIndex = indices.FirstOrDefault(v => !IsLogMethod(v.v)).i;
+            var lastIndex = indices.FirstOrDefault(v => IsILPostProcessorRoot(v.v)).i;
+            var result = frames.Take(lastIndex + 1).Skip(firstIndex);
+            return result;
+        }
+
+        private static string FormatStack(IEnumerable<StackFrame> frames)
+        {
+            var result = string.Concat(frames.Select(FormatStack));
+            return result;
+        }
+
+        private static string FormatStack(IEnumerable<(string file, string method, int line)> frames)
+        {
+            var result = string.Concat(frames.Select(FormatStack));
+            return result;
+        }
+
+        private static string FormatStack(StackFrame frame)
+        {
+            var method = frame.GetMethod();
+            var methodName = ILPostProcessorUtils.GetMethodName(method);
+            var fileName = frame.GetFileName()?.Replace("\\", "/")?.Replace(CurrentPath, string.Empty).Trim() ?? string.Empty;
+            var lineNumber = frame.GetFileLineNumber();
+            return $"{methodName} (at {fileName}:{lineNumber})\n";
+        }
+
+        private static string FormatStack((string file, string method, int line) frame)
+        {
+            var methodName = frame.method;
+            var fileName = frame.file?.Replace("\\", "/")?.Replace(CurrentPath, string.Empty).Trim() ?? string.Empty;
+            var lineNumber = frame.line;
+            return $"{methodName} (at {fileName}:{lineNumber})\n";
+        }
+
+        private static bool IsLogMethod(StackFrame frame)
+        {
+            var method = frame.GetMethod();
+            var reflectedType = method.ReflectedType;
+            return reflectedType == typeof(Logger) ||
+                   (reflectedType == typeof(ILPostProcessorUtils) && method.Name.StartsWith(nameof(ILPostProcessorUtils.Log)));
+        }
+
+        private static bool IsLogMethod((string file, string method, int line) frame)
+        {
+            return frame.method.StartsWith("Katuusagi.ConstExpressionForUnity.Editor.ILPostProcessorUtils.Log") ||
+                   frame.method.StartsWith("Katuusagi.ConstExpressionForUnity.Editor.Logger");
+        }
+
+        private static bool IsILPostProcessorRoot(StackFrame frame)
+        {
+            var method = frame.GetMethod();
+            var reflectedType = method.ReflectedType;
+            return typeof(ILPostProcessor).IsAssignableFrom(reflectedType) &&
+                   (method.Name == nameof(ILPostProcessor.Process) || method.Name == nameof(ILPostProcessor.WillProcess));
+        }
+
+        private static bool IsILPostProcessorRoot((string file, string method, int line) frame)
+        {
+            return frame.method == "Katuusagi.ConstExpressionForUnity.Editor.ConstExpressionILPostProcessor.Process(ICompiledAssembly compiledAssembly)";
+        }
+
+        private (string file, string method, int line) Parse(string stack)
+        {
+            string file = string.Empty;
+            string method = string.Empty;
+            int line = 0;
+            try
             {
-                DiagnosticType = DiagnosticType.Error,
-                MessageData = o.ToString(),
-                File = file,
-                Line = line,
-                Column = column,
-            });
-        }
+                var methodTop = stack.Substring(6, stack.Length - 6);
+                var splited = methodTop.Split(") in ");
+                if (splited.Length <= 1)
+                {
+                    method = methodTop.Trim();
+                }
+                else
+                {
+                    method = $"{splited[0]})";
+                    splited = splited[1].Split(":line ");
+                    file = splited[0].Trim();
+                    int.TryParse(splited[1], out line);
+                }
+            }
+            catch
+            {
+            }
 
-        public void LogException(Exception e)
-        {
-            LogError($"{e.GetType()}:{e.Message}", e.StackTrace);
+            return (file, method, line);
         }
     }
 }
