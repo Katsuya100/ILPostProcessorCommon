@@ -3,16 +3,16 @@ using Mono.Cecil.Cil;
 using Mono.Cecil.Rocks;
 using System;
 using System.Collections.Generic;
-using System.Diagnostics;
 using System.IO;
 using System.Linq;
+using System.Reflection;
 using System.Runtime.CompilerServices;
 using Unity.CompilationPipeline.Common.Diagnostics;
 using Unity.CompilationPipeline.Common.ILPostProcessing;
 
 namespace Katuusagi.ILPostProcessorCommon.Editor
 {
-    public static class ILPostProcessorUtils
+    public static class ILPPUtils
     {
         [ThreadStatic]
         private static Logger _logger;
@@ -21,6 +21,86 @@ namespace Katuusagi.ILPostProcessorCommon.Editor
         public static void InitLog<T>(ICompiledAssembly assembly)
         {
             _logger = new Logger(typeof(T), assembly);
+        }
+
+        public static void Log(object o)
+        {
+            _logger.Log(0, o);
+        }
+
+        public static void LogWarning(object log)
+        {
+            _logger.Log(DiagnosticType.Warning, log);
+        }
+
+        public static void LogWarning(string id, string title, object log)
+        {
+            _logger.Log(DiagnosticType.Warning, id, title, log);
+        }
+
+        public static void LogWarning(string id, string title, object log, MethodDefinition method, Instruction instruction)
+        {
+            _logger.Log(DiagnosticType.Warning, id, title, log, method, instruction);
+        }
+
+        public static void LogWarning(string id, string title, object log, MemberReference member)
+        {
+            _logger.Log(DiagnosticType.Warning, id, title, log, member);
+        }
+
+        public static void LogWarning(string id, string title, object log, MemberInfo member)
+        {
+            _logger.Log(DiagnosticType.Warning, id, title, log, member);
+        }
+
+        public static void LogWarning(string id, string title, object log, SequencePoint point)
+        {
+            _logger.Log(DiagnosticType.Warning, id, title, log, point);
+        }
+
+        public static void LogWarning(string id, string title, object log, string file, int line, int column)
+        {
+            _logger.Log(DiagnosticType.Warning, id, title, log, file, line, column);
+        }
+
+        public static void LogError(object log)
+        {
+            _logger.Log(DiagnosticType.Error, log);
+        }
+
+        public static void LogError(string id, string title, object log)
+        {
+            _logger.Log(DiagnosticType.Error, id, title, log);
+        }
+
+        public static void LogError(string id, string title, object log, MethodDefinition method, Instruction instruction)
+        {
+            _logger.Log(DiagnosticType.Error, id, title, log, method, instruction);
+        }
+
+        public static void LogError(string id, string title, object log, MemberReference member)
+        {
+            _logger.Log(DiagnosticType.Error, id, title, log, member);
+        }
+
+        public static void LogError(string id, string title, object log, MemberInfo member)
+        {
+            _logger.Log(DiagnosticType.Error, id, title, log, member);
+        }
+
+        public static void LogError(string id, string title, object log, SequencePoint point)
+        {
+            _logger.Log(DiagnosticType.Error, id, title, log, point);
+        }
+
+        public static void LogError(string id, string title, object log, string file, int line, int column)
+        {
+            _logger.Log(DiagnosticType.Error, id, title, log, file, line, column);
+        }
+
+        public static void LogException(Exception e)
+        {
+            _logger.Log(DiagnosticType.Error, e);
         }
 
         public static AssemblyDefinition LoadAssemblyDefinition(ICompiledAssembly compiledAssembly)
@@ -1201,6 +1281,11 @@ namespace Katuusagi.ILPostProcessorCommon.Editor
 
         public static string GetMemberName(MemberReference member)
         {
+            if (member == null)
+            {
+                return string.Empty;
+            }
+
             if (member is TypeReference type)
             {
                 return GetTypeName(type);
@@ -1441,7 +1526,7 @@ namespace Katuusagi.ILPostProcessorCommon.Editor
             return declairingType.MakeGenericInstanceType(declairingGenArgs);
         }
 
-        public static IEnumerable<FieldDefinition> GetFields(this TypeReference self, Func<FieldReference, bool> func = null)
+        public static IEnumerable<FieldDefinition> GetFields(this TypeReference self)
         {
             if (self is GenericInstanceType genType)
             {
@@ -1613,6 +1698,210 @@ namespace Katuusagi.ILPostProcessorCommon.Editor
             return result;
         }
 
+        public static SequencePoint GetSequencePoint(this MemberReference memberRef)
+        {
+            if (memberRef is FieldReference field)
+            {
+                return field.GetSequencePoint();
+            }
+
+            if (memberRef is PropertyReference property)
+            {
+                return property.GetSequencePoint();
+            }
+
+            if (memberRef is MethodReference method)
+            {
+                return method.GetSequencePoint();
+            }
+
+            if (memberRef is EventReference @event)
+            {
+                return @event.GetSequencePoint();
+            }
+
+            return null;
+        }
+
+        public static SequencePoint GetSequencePoint(this FieldReference fieldRef)
+        {
+            if (!(fieldRef is FieldDefinition field))
+            {
+                field = fieldRef.Resolve();
+            }
+
+            if (field == null)
+            {
+                return null;
+            }
+
+            var declairingType = field.DeclaringType;
+            MethodDefinition constructor = null;
+            OpCode stfld = default;
+            if (field.IsStatic)
+            {
+                // ‰Šú‰»Žq‚Ì“Á’è•û–@‚ª‚í‚©‚ç‚È‚¢
+                //constructor = declairingType.GetStaticConstructor();
+                //stfld = OpCodes.Stsfld;
+            }
+            else
+            {
+                constructor = declairingType.GetConstructors().FirstOrDefault(v => !v.IsStatic && v.Body != null && v.DebugInformation != null);
+                stfld = OpCodes.Stfld;
+            }
+
+            if (constructor == null)
+            {
+                return null;
+            }
+
+            var debugInformation = constructor.DebugInformation;
+            var instructions = constructor.Body.Instructions;
+            foreach (var instruction in instructions)
+            {
+                if (IsCall(instruction, constructor.Name))
+                {
+                    break;
+                }
+
+                if (instruction.OpCode != stfld ||
+                    !(instruction.Operand is FieldReference setField) ||
+                    !setField.Is(field))
+                {
+                    continue;
+                }
+
+                var point = constructor.GetSequencePoint(instruction);
+                if (point != null)
+                {
+                    return point;
+                }
+            }
+
+            return null;
+        }
+
+
+        public static SequencePoint GetSequencePoint(this PropertyReference propertyRef)
+        {
+            if (!(propertyRef is PropertyDefinition property))
+            {
+                property = propertyRef.Resolve();
+            }
+
+            if (property == null)
+            {
+                return null;
+            }
+
+            SequencePoint point;
+            if (property.GetMethod != null)
+            {
+                point = property.GetMethod.GetSequencePoint();
+                if (point != null)
+                {
+                    return point;
+                }
+            }
+
+            if (property.SetMethod != null)
+            {
+                point = property.SetMethod.GetSequencePoint();
+                if (point != null)
+                {
+                    return point;
+                }
+            }
+
+            foreach (var otherMethod in property.OtherMethods)
+            {
+                point = otherMethod.GetSequencePoint();
+                if (point != null)
+                {
+                    return point;
+                }
+            }
+
+            var declairingType = property.DeclaringType;
+            var field = declairingType.Fields.FirstOrDefault(v => v.Name == $"<{propertyRef.Name}>k__BackingField");
+            point = field.GetSequencePoint();
+            return point;
+        }
+
+        public static SequencePoint GetSequencePoint(this MethodReference methodRef)
+        {
+            if (!(methodRef is MethodDefinition method))
+            {
+                method = methodRef.Resolve();
+            }
+
+            var body = method.Body;
+            var debugInformation = method.DebugInformation;
+            if (body == null ||
+                debugInformation == null)
+            {
+                return null;
+            }
+
+            var it = body.Instructions.FirstOrDefault();
+            while (it != null)
+            {
+                var point = debugInformation.GetSequencePoint(it);
+                it = it.Next;
+                if (point != null)
+                {
+                    return point;
+                }
+            }
+            return null;
+        }
+
+        public static SequencePoint GetSequencePoint(this MethodDefinition method, Instruction instruction)
+        {
+            var debugInformation = method.DebugInformation;
+            if (debugInformation == null)
+            {
+                return null;
+            }
+
+            var it = instruction;
+            while (it != null)
+            {
+                var point = debugInformation.GetSequencePoint(it);
+                it = it.Previous;
+                if (point != null)
+                {
+                    return point;
+                }
+            }
+            return null;
+        }
+
+        public static SequencePoint GetSequencePoint(this EventReference eventRef)
+        {
+            if (!(eventRef is EventDefinition @event))
+            {
+                @event = eventRef.Resolve();
+            }
+
+            if (@event == null)
+            {
+                return null;
+            }
+
+            var declairingType = @event.DeclaringType;
+            var field = declairingType.Fields.FirstOrDefault(v => v.Name == eventRef.Name);
+            var point = field.GetSequencePoint();
+            return point;
+        }
+
+        private static bool IsCall(Instruction instruction, string name)
+        {
+            return instruction.OpCode == OpCodes.Call &&
+                   instruction.Operand is MethodReference baseConstructor &&
+                   baseConstructor.Name == name;
+        }
+
         public static int GetHashCode_(this TypeReference self)
         {
             return TypeReferenceComparer.Default.GetHashCode(self);
@@ -1687,116 +1976,6 @@ namespace Katuusagi.ILPostProcessorCommon.Editor
             cloned.Constant = self.Constant;
             cloned.MarshalInfo = self.MarshalInfo;
             return cloned;
-        }
-
-        public static void Log(object o)
-        {
-            Logger.Log(0, o);
-        }
-
-        public static void Log(object o, MethodDefinition method, Instruction instruction)
-        {
-            Logger.Log(0, o, method, instruction);
-        }
-
-        public static void Log(object o, MemberReference member)
-        {
-            Logger.Log(0, o, member);
-        }
-
-        public static void Log(object o, System.Reflection.MemberInfo member)
-        {
-            Logger.Log(0, o, member);
-        }
-
-        public static void Log(object o, SequencePoint point)
-        {
-            Logger.Log(0, o, point);
-        }
-
-        public static void Log(object o, StackFrame frame)
-        {
-            Logger.Log(0, o, frame);
-        }
-
-        public static void Log(object o, string file, int line, int column)
-        {
-            Logger.Log(0, o, file, line, column);
-        }
-
-        public static void LogWarning(object o)
-        {
-            Logger.Log(DiagnosticType.Warning, o);
-        }
-
-        public static void LogWarning(object o, MethodDefinition method, Instruction instruction)
-        {
-            Logger.Log(DiagnosticType.Warning, o, method, instruction);
-        }
-
-        public static void LogWarning(object o, MemberReference member)
-        {
-            Logger.Log(DiagnosticType.Warning, o, member);
-        }
-
-        public static void LogWarning(object o, System.Reflection.MemberInfo member)
-        {
-            Logger.Log(DiagnosticType.Warning, o, member);
-        }
-
-        public static void LogWarning(object o, SequencePoint point)
-        {
-            Logger.Log(DiagnosticType.Warning, o, point);
-        }
-
-        public static void LogWarning(object o, StackFrame frame)
-        {
-            Logger.Log(DiagnosticType.Warning, o, frame);
-        }
-
-        public static void LogWarning(object o, string file, int line, int column)
-        {
-            Logger.Log(DiagnosticType.Warning, o, file, line, column);
-        }
-
-        public static void LogError(object o)
-        {
-            Logger.Log(DiagnosticType.Error, o);
-        }
-
-        public static void LogError(object o, MethodDefinition method, Instruction instruction)
-        {
-            Logger.Log(DiagnosticType.Error, o, method, instruction);
-        }
-
-        public static void LogError(object o, MemberReference member)
-        {
-            Logger.Log(DiagnosticType.Error, o, member);
-        }
-
-        public static void LogError(object o, System.Reflection.MemberInfo member)
-        {
-            Logger.Log(DiagnosticType.Error, o, member);
-        }
-
-        public static void LogError(object o, SequencePoint point)
-        {
-            Logger.Log(DiagnosticType.Error, o, point);
-        }
-
-        public static void LogError(object o, StackFrame frame)
-        {
-            Logger.Log(DiagnosticType.Error, o, frame);
-        }
-
-        public static void LogError(object o, string file, int line, int column)
-        {
-            Logger.Log(DiagnosticType.Error, o, file, line, column);
-        }
-
-        public static void LogException(Exception e)
-        {
-            Logger.Log(DiagnosticType.Error, e);
         }
 
         public static OpCode SwitchShortOpCode(OpCode opCode)

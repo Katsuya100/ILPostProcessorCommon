@@ -13,14 +13,24 @@ namespace Katuusagi.ILPostProcessorCommon.Editor
 {
     public class Logger
     {
+        private struct Frame
+        {
+            public string File;
+            public string Method;
+            public int Line;
+            public int Column;
+        }
+
         private static readonly string CurrentPath = $"{Environment.CurrentDirectory.Replace("\\", "/")}/";
 
+        private Type _rootType;
         private string _logPath;
         private List<DiagnosticMessage> _messages = new List<DiagnosticMessage>();
         public List<DiagnosticMessage> Messages => _messages;
 
         public Logger(Type type, ICompiledAssembly assembly)
         {
+            _rootType = type;
             _logPath = $"Logs/{type.Name}/{assembly.Name}.txt";
             var dir = Path.GetDirectoryName(_logPath);
             if (!Directory.Exists(dir))
@@ -30,15 +40,52 @@ namespace Katuusagi.ILPostProcessorCommon.Editor
             File.Open(_logPath, FileMode.Create, FileAccess.Write, FileShare.Read).Dispose();
         }
 
-        private void LogInternal(DiagnosticType type, object o, string file, int line, int column, string stacktrace)
+        private void Write(object o)
         {
-            file = file.Replace("\\", "/").Replace(CurrentPath, string.Empty).Trim();
-            var logType = type == 0 ? string.Empty : $"{type} ";
-            var log = $"{file}({line},{column}):{logType}{o}\n{stacktrace}";
             using (var f = File.AppendText(_logPath))
             {
-                f.WriteLine(log);
+                f.WriteLine(o);
             }
+        }
+
+        private void LogRaw(DiagnosticType type, string id, string title, object o, string file, int line, int column, IEnumerable<Frame> frames)
+        {
+            if (string.IsNullOrEmpty(id))
+            {
+                id = type.ToString();
+            }
+
+            if (string.IsNullOrEmpty(title))
+            {
+                title = type.ToString();
+            }
+
+            if (frames == null)
+            {
+                frames = GetStack();
+            }
+
+            frames = TrimStack(frames);
+
+            if (file == null)
+            {
+                var frame = frames.FirstOrDefault(v => !string.IsNullOrEmpty(v.File));
+                file = frame.File;
+                line = frame.Line;
+                column = frame.Column;
+            }
+
+            if (string.IsNullOrEmpty(file))
+            {
+                file = " ";
+            }
+
+            file = file.Replace("\\", "/").Replace(CurrentPath, string.Empty).Trim();
+            var stacktrace = FormatStack(frames);
+
+            var logType = type == 0 ? "Info" : type.ToString();
+            var log = $"{file}({line},{column}):{logType} {id}:{o}\n{stacktrace}";
+            Write(log);
 
             Console.WriteLine(log);
 
@@ -47,7 +94,7 @@ namespace Katuusagi.ILPostProcessorCommon.Editor
                 _messages.Add(new DiagnosticMessage()
                 {
                     DiagnosticType = type,
-                    MessageData = $"{o}",
+                    MessageData = $"{id}:{o}",
                     File = file,
                     Line = line,
                     Column = column,
@@ -55,272 +102,174 @@ namespace Katuusagi.ILPostProcessorCommon.Editor
             }
         }
 
-        private void LogInternal(DiagnosticType type, object o, IEnumerable<(string file, string method, int line)> frames)
+        private void LogInternal(DiagnosticType type, string id, string title, object o, string file, int line, int column, IEnumerable<Frame> frames = null)
         {
-            var useFrames = TrimStack(frames);
-            var stackLog = FormatStack(useFrames);
+            if (file == null)
+            {
+                file = " ";
+            }
 
-            var frame = useFrames.FirstOrDefault(v => !string.IsNullOrEmpty(v.file));
-            var file = frame.file;
-            var line = frame.line;
-            var column = 0;
-
-            LogInternal(type, o, file, line, column, stackLog);
+            LogRaw(type, id, title, o, file, line, column, frames);
         }
 
-        private void LogInternal(DiagnosticType type, object o, IEnumerable<StackFrame> frames)
+        private void LogInternal(DiagnosticType type, string id, string title, object o, IEnumerable<Frame> frames = null)
         {
-            var useFrames = TrimStack(frames);
-            var stackLog = FormatStack(useFrames);
-
-            var frame = useFrames.FirstOrDefault(v => !string.IsNullOrEmpty(v.GetFileName()));
-            var file = frame?.GetFileName() ?? string.Empty;
-            var line = frame?.GetFileLineNumber() ?? 0;
-            var column = frame?.GetFileColumnNumber() ?? 0;
-
-            LogInternal(type, o, file, line, column, stackLog);
+            LogRaw(type, id, title, o, null, 0, 0, frames);
         }
 
-        private void LogInternal(DiagnosticType type, object o, string file, int line, int column, IEnumerable<StackFrame> frames)
+        private void LogInternal(DiagnosticType type, string id, string title, object o, SequencePoint point, IEnumerable<Frame> frames = null)
         {
-            var useFrames = TrimStack(frames);
-            var stackLog = FormatStack(useFrames);
-            LogInternal(type, o, file, line, column, stackLog);
+            if (point == null)
+            {
+                LogInternal(type, id, title, o, string.Empty, 0, 0, frames);
+                return;
+            }
+            LogRaw(type, id, title, o, point.Document.Url, point.StartLine, point.StartColumn, frames);
         }
 
-        private void LogInternal(DiagnosticType type, object o, string file, int line, int column, IEnumerable<(string file, string method, int line)> frames)
+        private void LogInternal(DiagnosticType type, string id, string title, object o, MemberReference member)
         {
-            var useFrames = TrimStack(frames);
-            var stackLog = FormatStack(useFrames);
-            LogInternal(type, o, file, line, column, stackLog);
+            if (member == null)
+            {
+                LogInternal(type, id, title, o, string.Empty, 0, 0);
+                return;
+            }
+
+            var point = member.GetSequencePoint();
+            if (point == null)
+            {
+                LogInternal(type, id, title, $"{o}  (at {ILPPUtils.GetMemberName(member)})", string.Empty, 0, 0);
+                return;
+            }
+
+            LogInternal(type, id, title, o, point);
         }
 
-        private void LogInternal(DiagnosticType type, object o)
+        private void LogInternal(DiagnosticType type, string id, string title, object o, MemberInfo member)
         {
-            var stack = new StackTrace(true);
-            var frames = stack.GetFrames();
-            LogInternal(type, o, frames);
-        }
+            if (member == null)
+            {
+                LogInternal(type, id, title, o, string.Empty, 0, 0);
+                return;
+            }
 
-        private void LogInternal(DiagnosticType type, object o, string file, int line, int column)
-        {
-            var stack = new StackTrace(true);
-            var frames = stack.GetFrames();
-            LogInternal(type, o, file, line, column, frames);
-        }
-
-        private void LogInternal(DiagnosticType type, object o, string target)
-        {
-            LogInternal(type, $"{o}  at {target}");
-        }
-
-        private void LogInternal(DiagnosticType type, object o, string target, string file, int line, int column)
-        {
-            LogInternal(type, $"{o}  at {target}", file, line, column);
-        }
-
-        private void LogInternal(DiagnosticType type, object o, MemberReference member)
-        {
-            LogInternal(type, o, ILPostProcessorUtils.GetMemberName(member));
-        }
-
-        private void LogInternal(DiagnosticType type, object o, MemberReference member, string file, int line, int column)
-        {
-            LogInternal(type, o, ILPostProcessorUtils.GetMemberName(member), file, line, column);
-        }
-
-        private void LogInternal(DiagnosticType type, object o, MemberInfo member)
-        {
-            LogInternal(type, o, ILPostProcessorUtils.GetMemberName(member));
-        }
-
-        private void LogInternal(DiagnosticType type, object o, MemberInfo member, string file, int line, int column)
-        {
-            LogInternal(type, o, ILPostProcessorUtils.GetMemberName(member), file, line, column);
+            LogInternal(type, id, title, $"{o}  (at {ILPPUtils.GetMemberName(member)})", string.Empty, 0, 0);
         }
 
         public void Log(DiagnosticType type, object o)
         {
-            LogInternal(type, o);
+            LogInternal(type, string.Empty, string.Empty, o);
         }
 
-        public void Log(DiagnosticType type, object o, MethodDefinition method, Instruction instruction)
+        public void Log(DiagnosticType type, string id, string title, object o)
         {
-            SequencePoint point = null;
-            for (var it = instruction; it != null && point == null; it = it.Previous)
-            {
-                point = method.DebugInformation.GetSequencePoint(it);
-            }
+            LogInternal(type, id, title, o);
+        }
 
-            if (point == null)
+        public void Log(DiagnosticType type, string id, string title, object o, MethodDefinition method, Instruction instruction)
+        {
+            if (method == null)
             {
-                LogInternal(type, o, method, string.Empty, 0, 0);
+                LogInternal(type, id, title, o, string.Empty, 0, 0);
                 return;
             }
 
-            Log(type, o, point);
+            var point = method.GetSequencePoint(instruction);
+            if (point == null)
+            {
+                LogInternal(type, id, title, o, method);
+                return;
+            }
+
+            LogInternal(type, id, title, o, point);
+        }
+
+        public void Log(DiagnosticType type, string id, string title, object o, MemberReference member)
+        {
+            LogInternal(type, id, title, o, member);
+        }
+
+        public void Log(DiagnosticType type, string id, string title, object o, MemberInfo member)
+        {
+            LogInternal(type, id, title, o, member);
+        }
+
+        public void Log(DiagnosticType type, string id, string title, object o, SequencePoint point)
+        {
+            LogInternal(type, id, title, o, point);
+        }
+
+        public void Log(DiagnosticType type, string id, string title, object o, string file, int line, int column)
+        {
+            LogInternal(type, id, title, o, file, line, column);
         }
 
         public void Log(DiagnosticType type, Exception e)
         {
-            Log(type, $"{e.GetType()}:{e.Message}", e.StackTrace);
-        }
-
-        public void Log(DiagnosticType type, object o, MemberInfo member)
-        {
-            LogInternal(type, o, member, string.Empty, 0, 0);
-        }
-
-        public void Log(DiagnosticType type, object o, MemberReference member)
-        {
-            MethodDefinition method = null;
-            if (member is MethodReference methodRef)
+            if (e == null)
             {
-                if (!(member is MethodDefinition methodTmp))
-                {
-                    methodTmp = methodRef.Resolve();
-                }
-
-                method = methodTmp;
-            }
-            else if (member is PropertyReference propertyRef)
-            {
-                if (!(propertyRef is PropertyDefinition property))
-                {
-                    property = propertyRef.Resolve();
-                }
-
-                method = property?.GetMethod ?? property?.SetMethod;
-            }
-
-            if (method != null)
-            {
-                var point = method.DebugInformation.SequencePoints.FirstOrDefault();
-                if (point != null)
-                {
-                    Log(type, o, point);
-                    return;
-                }
-            }
-
-            LogInternal(type, o, member, string.Empty, 0, 0);
-        }
-
-        public void Log(DiagnosticType type, object o, string stacktrace)
-        {
-            var splitedStackTraces = stacktrace.Split('\n');
-            var stackframes = splitedStackTraces.Select(Parse);
-            LogInternal(type, o, stackframes);
-        }
-
-        public void Log(DiagnosticType type, object o, SequencePoint point)
-        {
-            if (point == null)
-            {
-                LogInternal(type, o, string.Empty, 0, 0);
+                LogInternal(type, "Exception", "Exception", "Unknown Exception");
                 return;
             }
 
-            var fileName = point.Document.Url;
-            var line = point.StartLine;
-            var column = point.StartColumn;
-            LogInternal(type, o, fileName, line, column);
+            var frames = ParseStack(e.StackTrace);
+            LogInternal(type, "Exception", "Exception", $"{e.GetType()}:{e.Message}", frames);
         }
 
-        public void Log(DiagnosticType type, object o, StackFrame frame)
+        private IEnumerable<Frame> ParseStack(string stackTrace)
         {
-            if (frame == null)
+            var splitedStackTraces = stackTrace.Split('\n');
+            return splitedStackTraces.Select(Parse);
+        }
+
+        private IEnumerable<Frame> GetStack()
+        {
+            var stack = new StackTrace(true);
+            return stack.GetFrames().Select(v => new Frame()
             {
-                LogInternal(type, o, string.Empty, 0, 0);
-                return;
-            }
-
-            var fileName = frame.GetFileName();
-            var line = frame.GetFileLineNumber();
-            var column = frame.GetFileColumnNumber();
-            LogInternal(type, o, fileName, line, column);
+                File = v?.GetFileName(),
+                Method = ILPPUtils.GetMethodName(v?.GetMethod()),
+                Line = v?.GetFileLineNumber() ?? 0,
+                Column = v?.GetFileColumnNumber() ?? 0
+            });
         }
 
-        public void Log(DiagnosticType type, object o, string file, int line, int column)
-        {
-            LogInternal(type, o, file, line, column);
-        }
-
-        private static IEnumerable<StackFrame> TrimStack(IEnumerable<StackFrame> frames)
+        private IEnumerable<Frame> TrimStack(IEnumerable<Frame> frames)
         {
             var indices = frames.Select((v, i) => (v, i));
             var firstIndex = indices.FirstOrDefault(v => !IsLogMethod(v.v)).i;
-            var lastIndex = indices.FirstOrDefault(v => IsILPostProcessorRoot(v.v)).i;
+            var lastIndex = indices.FirstOrDefault(v => IsRoot(v.v)).i;
             var result = frames.Take(lastIndex + 1).Skip(firstIndex);
             return result;
         }
 
-        private static IEnumerable<(string file, string method, int line)> TrimStack(IEnumerable<(string file, string method, int line)> frames)
-        {
-            var indices = frames.Select((v, i) => (v, i));
-            var firstIndex = indices.FirstOrDefault(v => !IsLogMethod(v.v)).i;
-            var lastIndex = indices.FirstOrDefault(v => IsILPostProcessorRoot(v.v)).i;
-            var result = frames.Take(lastIndex + 1).Skip(firstIndex);
-            return result;
-        }
-
-        private static string FormatStack(IEnumerable<StackFrame> frames)
+        private string FormatStack(IEnumerable<Frame> frames)
         {
             var result = string.Concat(frames.Select(FormatStack));
             return result;
         }
 
-        private static string FormatStack(IEnumerable<(string file, string method, int line)> frames)
+        private string FormatStack(Frame frame)
         {
-            var result = string.Concat(frames.Select(FormatStack));
-            return result;
-        }
-
-        private static string FormatStack(StackFrame frame)
-        {
-            var method = frame.GetMethod();
-            var methodName = ILPostProcessorUtils.GetMethodName(method);
-            var fileName = frame.GetFileName()?.Replace("\\", "/")?.Replace(CurrentPath, string.Empty).Trim() ?? string.Empty;
-            var lineNumber = frame.GetFileLineNumber();
+            var methodName = frame.Method;
+            var fileName = frame.File?.Replace("\\", "/")?.Replace(CurrentPath, string.Empty).Trim() ?? string.Empty;
+            var lineNumber = frame.Line;
             return $"{methodName} (at {fileName}:{lineNumber})\n";
         }
 
-        private static string FormatStack((string file, string method, int line) frame)
+        private bool IsLogMethod(Frame frame)
         {
-            var methodName = frame.method;
-            var fileName = frame.file?.Replace("\\", "/")?.Replace(CurrentPath, string.Empty).Trim() ?? string.Empty;
-            var lineNumber = frame.line;
-            return $"{methodName} (at {fileName}:{lineNumber})\n";
+            return frame.Method.StartsWith($"{typeof(ILPPUtils).FullName}.Log") ||
+                   frame.Method.StartsWith(typeof(Logger).FullName);
         }
 
-        private static bool IsLogMethod(StackFrame frame)
+        private bool IsRoot(Frame frame)
         {
-            var method = frame.GetMethod();
-            var reflectedType = method.ReflectedType;
-            return reflectedType == typeof(Logger) ||
-                   (reflectedType == typeof(ILPostProcessorUtils) && method.Name.StartsWith(nameof(ILPostProcessorUtils.Log)));
+            return frame.Method.StartsWith($"{_rootType.FullName}.{nameof(ILPostProcessor.Process)}({nameof(ICompiledAssembly)}") ||
+                   frame.Method.StartsWith($"{_rootType.FullName}.{nameof(ILPostProcessor.WillProcess)}({nameof(ICompiledAssembly)}");
         }
 
-        private static bool IsLogMethod((string file, string method, int line) frame)
-        {
-            return frame.method.StartsWith("Katuusagi.ConstExpressionForUnity.Editor.ILPostProcessorUtils.Log") ||
-                   frame.method.StartsWith("Katuusagi.ConstExpressionForUnity.Editor.Logger");
-        }
-
-        private static bool IsILPostProcessorRoot(StackFrame frame)
-        {
-            var method = frame.GetMethod();
-            var reflectedType = method.ReflectedType;
-            return typeof(ILPostProcessor).IsAssignableFrom(reflectedType) &&
-                   (method.Name == nameof(ILPostProcessor.Process) || method.Name == nameof(ILPostProcessor.WillProcess));
-        }
-
-        private static bool IsILPostProcessorRoot((string file, string method, int line) frame)
-        {
-            return frame.method == "Katuusagi.ConstExpressionForUnity.Editor.ConstExpressionILPostProcessor.Process(ICompiledAssembly compiledAssembly)";
-        }
-
-        private (string file, string method, int line) Parse(string stack)
+        private Frame Parse(string stack)
         {
             string file = string.Empty;
             string method = string.Empty;
@@ -328,7 +277,7 @@ namespace Katuusagi.ILPostProcessorCommon.Editor
             try
             {
                 var methodTop = stack.Substring(6, stack.Length - 6);
-                var splited = methodTop.Split(") in ");
+                var splited = methodTop.Split(new string[] { ") in " }, StringSplitOptions.None);
                 if (splited.Length <= 1)
                 {
                     method = methodTop.Trim();
@@ -336,7 +285,7 @@ namespace Katuusagi.ILPostProcessorCommon.Editor
                 else
                 {
                     method = $"{splited[0]})";
-                    splited = splited[1].Split(":line ");
+                    splited = splited[1].Split(new string[] { ":line " }, StringSplitOptions.None);
                     file = splited[0].Trim();
                     int.TryParse(splited[1], out line);
                 }
@@ -345,7 +294,13 @@ namespace Katuusagi.ILPostProcessorCommon.Editor
             {
             }
 
-            return (file, method, line);
+            return new Frame()
+            {
+                File = file,
+                Method = method,
+                Line = line,
+            };
         }
+
     }
 }

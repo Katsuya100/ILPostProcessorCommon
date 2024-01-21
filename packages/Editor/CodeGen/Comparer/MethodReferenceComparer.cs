@@ -27,13 +27,15 @@ namespace Katuusagi.ILPostProcessorCommon.Editor
                 return false;
             }
 
-            if (x.IsGenericDefinition())
+            var isGenDefX = x.IsGenericDefinition();
+            var isGenDefY = y.IsGenericDefinition();
+            if (isGenDefX != isGenDefY)
             {
-                if (!y.IsGenericDefinition())
-                {
-                    return false;
-                }
+                return false;
+            }
 
+            if (isGenDefX)
+            {
                 if (!x.Parameters.Select(v => v.ParameterType.FullName).SequenceEqual(y.Parameters.Select(v => v.ParameterType.FullName)))
                 {
                     return false;
@@ -58,14 +60,16 @@ namespace Katuusagi.ILPostProcessorCommon.Editor
             {
                 return false;
             }
-
-            if (x is GenericInstanceMethod gx)
+            
+            var gx = x as GenericInstanceMethod;
+            var gy = y as GenericInstanceMethod;
+            if ((gx != null) != (gy != null))
             {
-                if (!(y is GenericInstanceMethod gy))
-                {
-                    return false;
-                }
+                return false;
+            }
 
+            if (gx != null)
+            {
                 return gx.GenericArguments.SequenceEqual(gy.GenericArguments, TypeReferenceComparer.Default);
             }
 

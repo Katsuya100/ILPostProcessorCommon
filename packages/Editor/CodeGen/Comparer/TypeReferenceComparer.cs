@@ -22,13 +22,15 @@ namespace Katuusagi.ILPostProcessorCommon.Editor
                 return false;
             }
 
-            if (x is GenericParameter gpx)
+            var gpx = x as GenericParameter;
+            var gpy = y as GenericParameter;
+            if ((gpx != null) != (gpy != null))
             {
-                if (!(y is GenericParameter gpy))
-                {
-                    return false;
-                }
+                return false;
+            }
 
+            if (gpx != null)
+            {
                 if (gpx.Owner is TypeReference ox)
                 {
                     if (!(gpy.Owner is TypeReference oy))
@@ -66,13 +68,15 @@ namespace Katuusagi.ILPostProcessorCommon.Editor
                 return false;
             }
 
-            if (x.IsGenericDefinition())
+            var isGenDefX = x.IsGenericDefinition();
+            var isGenDefY = y.IsGenericDefinition();
+            if (isGenDefX != isGenDefY)
             {
-                if (!y.IsGenericDefinition())
-                {
-                    return false;
-                }
+                return false;
+            }
 
+            if (isGenDefX)
+            {
                 var xd = x.DeclaringType?.GetElementType();
                 var yd = y.DeclaringType?.GetElementType();
                 if (!xd.Is(yd))
@@ -88,23 +92,27 @@ namespace Katuusagi.ILPostProcessorCommon.Editor
                 return false;
             }
 
-            if (x is GenericInstanceType gx)
+            var gx = x as GenericInstanceType;
+            var gy = y as GenericInstanceType;
+            if ((gx != null) != (gy != null))
             {
-                if (!(y is GenericInstanceType gy))
-                {
-                    return false;
-                }
+                return false;
+            }
 
+            if (gx != null)
+            {
                 return gx.GenericArguments.SequenceEqual(gy.GenericArguments, Default);
             }
 
-            if (x is ArrayType ax)
+            var ax = x as ArrayType;
+            var ay = y as ArrayType;
+            if ((ax != null) != (ay != null))
             {
-                if (!(y is ArrayType ay))
-                {
-                    return false;
-                }
+                return false;
+            }
 
+            if (ax != null)
+            {
                 if (ax.Rank != ay.Rank)
                 {
                     return false;

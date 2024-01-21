@@ -39,7 +39,7 @@ namespace Katuusagi.ILPostProcessorCommon.Editor
 
         public Instruction LoadValue(object constantValue)
         {
-            var loadLiteral = ILPostProcessorUtils.LoadLiteral(constantValue);
+            var loadLiteral = ILPPUtils.LoadLiteral(constantValue);
             if (loadLiteral != null)
             {
                 return loadLiteral;
@@ -72,7 +72,7 @@ namespace Katuusagi.ILPostProcessorCommon.Editor
             }
 
             var objType = obj.GetType();
-            if (!ILPostProcessorUtils.IsStructRecursive(objType))
+            if (!ILPPUtils.IsStructRecursive(objType))
             {
                 return null;
             }
@@ -86,19 +86,19 @@ namespace Katuusagi.ILPostProcessorCommon.Editor
                     var array = (byte*)UnsafeUtility.AddressOf(ref b.First);
 
                     // 静的コンストラクタに初期化処理を書く
-                    instructions.Add(ILPostProcessorUtils.LoadLiteral(size));
+                    instructions.Add(ILPPUtils.LoadLiteral(size));
                     instructions.Add(Instruction.Create(OpCodes.Conv_U));
                     instructions.Add(Instruction.Create(OpCodes.Localloc));
                     instructions.Add(Instruction.Create(OpCodes.Dup));
-                    instructions.Add(ILPostProcessorUtils.LoadLiteral(array[0]));
+                    instructions.Add(ILPPUtils.LoadLiteral(array[0]));
                     instructions.Add(Instruction.Create(OpCodes.Stind_I1));
 
                     for (int i = 1; i < size; ++i)
                     {
                         instructions.Add(Instruction.Create(OpCodes.Dup));
-                        instructions.Add(ILPostProcessorUtils.LoadLiteral(i));
+                        instructions.Add(ILPPUtils.LoadLiteral(i));
                         instructions.Add(Instruction.Create(OpCodes.Add));
-                        instructions.Add(ILPostProcessorUtils.LoadLiteral(array[i]));
+                        instructions.Add(ILPPUtils.LoadLiteral(array[i]));
                         instructions.Add(Instruction.Create(OpCodes.Stind_I1));
                     }
 
@@ -132,16 +132,16 @@ namespace Katuusagi.ILPostProcessorCommon.Editor
                 var arrayTypeCast = _constTableType.Module.ImportReference(implicitMethod);
 
                 var count = Count(array);
-                instructions.Add(ILPostProcessorUtils.LoadLiteral(count));
+                instructions.Add(ILPPUtils.LoadLiteral(count));
                 instructions.Add(Instruction.Create(OpCodes.Newarr, elementTypeRef));
 
                 int i = 0;
                 foreach (var e in array)
                 {
                     instructions.Add(Instruction.Create(OpCodes.Dup));
-                    instructions.Add(ILPostProcessorUtils.LoadLiteral(i));
-                    instructions.Add(ILPostProcessorUtils.LoadLiteral(e));
-                    instructions.Add(ILPostProcessorUtils.SetElement(elementType));
+                    instructions.Add(ILPPUtils.LoadLiteral(i));
+                    instructions.Add(ILPPUtils.LoadLiteral(e));
+                    instructions.Add(ILPPUtils.SetElement(elementType));
                     ++i;
                 }
 
