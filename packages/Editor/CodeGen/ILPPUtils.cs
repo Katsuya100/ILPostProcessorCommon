@@ -5,7 +5,6 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
-using System.Reflection;
 using System.Runtime.CompilerServices;
 using Unity.CompilationPipeline.Common.Diagnostics;
 using Unity.CompilationPipeline.Common.ILPostProcessing;
@@ -48,7 +47,7 @@ namespace Katuusagi.ILPostProcessorCommon.Editor
             _logger.Log(DiagnosticType.Warning, id, title, log, member);
         }
 
-        public static void LogWarning(string id, string title, object log, MemberInfo member)
+        public static void LogWarning(string id, string title, object log, System.Reflection.MemberInfo member)
         {
             _logger.Log(DiagnosticType.Warning, id, title, log, member);
         }
@@ -83,7 +82,7 @@ namespace Katuusagi.ILPostProcessorCommon.Editor
             _logger.Log(DiagnosticType.Error, id, title, log, member);
         }
 
-        public static void LogError(string id, string title, object log, MemberInfo member)
+        public static void LogError(string id, string title, object log, System.Reflection.MemberInfo member)
         {
             _logger.Log(DiagnosticType.Error, id, title, log, member);
         }
@@ -478,6 +477,102 @@ namespace Katuusagi.ILPostProcessorCommon.Editor
 
             return null;
         }
+        public static Instruction LoadArgument(ParameterDefinition parameter)
+        {
+            switch (parameter.Index)
+            {
+                case 0:
+                    return Instruction.Create(OpCodes.Ldarg_0);
+                case 1:
+                    return Instruction.Create(OpCodes.Ldarg_1);
+                case 2:
+                    return Instruction.Create(OpCodes.Ldarg_2);
+                case 3:
+                    return Instruction.Create(OpCodes.Ldarg_3);
+            }
+
+            if (parameter.Index < byte.MaxValue)
+            {
+                return Instruction.Create(OpCodes.Ldarg_S, parameter);
+            }
+
+            return Instruction.Create(OpCodes.Ldarg, parameter);
+        }
+
+        public static Instruction LoadArgumentAddress(ParameterDefinition parameter)
+        {
+            if (parameter.Index < byte.MaxValue)
+            {
+                return Instruction.Create(OpCodes.Ldarga_S, parameter);
+            }
+
+            return Instruction.Create(OpCodes.Ldarga, parameter);
+        }
+
+        public static Instruction SetArgument(ParameterDefinition parameter)
+        {
+            if (parameter.Index < byte.MaxValue)
+            {
+                return Instruction.Create(OpCodes.Starg_S, parameter);
+            }
+
+            return Instruction.Create(OpCodes.Starg, parameter);
+        }
+
+        public static Instruction LoadLocal(VariableDefinition variable)
+        {
+            switch (variable.Index)
+            {
+                case 0:
+                    return Instruction.Create(OpCodes.Ldloc_0);
+                case 1:
+                    return Instruction.Create(OpCodes.Ldloc_1);
+                case 2:
+                    return Instruction.Create(OpCodes.Ldloc_2);
+                case 3:
+                    return Instruction.Create(OpCodes.Ldloc_3);
+            }
+
+            if (variable.Index < byte.MaxValue)
+            {
+                return Instruction.Create(OpCodes.Ldloc_S, variable);
+            }
+
+            return Instruction.Create(OpCodes.Ldloc, variable);
+        }
+
+        public static Instruction LoadLocalAddress(VariableDefinition variable)
+        {
+            if (variable.Index < byte.MaxValue)
+            {
+                return Instruction.Create(OpCodes.Ldloca_S, variable);
+            }
+
+            return Instruction.Create(OpCodes.Ldloca, variable);
+        }
+
+        public static Instruction SetLocal(VariableDefinition variable)
+        {
+            switch (variable.Index)
+            {
+                case 0:
+                    return Instruction.Create(OpCodes.Stloc_0);
+                case 1:
+                    return Instruction.Create(OpCodes.Stloc_1);
+                case 2:
+                    return Instruction.Create(OpCodes.Stloc_2);
+                case 3:
+                    return Instruction.Create(OpCodes.Stloc_3);
+            }
+
+            if (variable.Index < byte.MaxValue)
+            {
+                return Instruction.Create(OpCodes.Stloc_S, variable);
+            }
+
+            return Instruction.Create(OpCodes.Stloc, variable);
+        }
+
 
         public static bool TryGetConstValue<T>(ref Instruction instruction, out T result)
         {
@@ -943,7 +1038,7 @@ namespace Katuusagi.ILPostProcessorCommon.Editor
 
             if (opCode == OpCodes.Conv_I1)
             {
-                instruction = instruction.Previous;
+                instruction = instruction.GetPrev();
                 if (!TryGetConstValue(ref instruction, out result))
                 {
                     return false;
@@ -973,7 +1068,7 @@ namespace Katuusagi.ILPostProcessorCommon.Editor
 
             if (opCode == OpCodes.Conv_I2)
             {
-                instruction = instruction.Previous;
+                instruction = instruction.GetPrev();
                 if (!TryGetConstValue(ref instruction, out result))
                 {
                     return false;
@@ -1003,7 +1098,7 @@ namespace Katuusagi.ILPostProcessorCommon.Editor
 
             if (opCode == OpCodes.Conv_I4)
             {
-                instruction = instruction.Previous;
+                instruction = instruction.GetPrev();
                 if (!TryGetConstValue(ref instruction, out result))
                 {
                     return false;
@@ -1033,7 +1128,7 @@ namespace Katuusagi.ILPostProcessorCommon.Editor
 
             if (opCode == OpCodes.Conv_I8)
             {
-                instruction = instruction.Previous;
+                instruction = instruction.GetPrev();
                 if (!TryGetConstValue(ref instruction, out result))
                 {
                     return false;
@@ -1061,62 +1156,8 @@ namespace Katuusagi.ILPostProcessorCommon.Editor
                 }
             }
 
-            if (opCode == OpCodes.Ldloc_0)
-            {
-                var ret = TryGetLocalConstValue(instruction, OpCodes.Stloc_0, operand, out result);
-                return ret;
-            }
-
-            if (opCode == OpCodes.Ldloc_1)
-            {
-                var ret = TryGetLocalConstValue(instruction, OpCodes.Stloc_1, operand, out result);
-                return ret;
-            }
-
-            if (opCode == OpCodes.Ldloc_2)
-            {
-                var ret = TryGetLocalConstValue(instruction, OpCodes.Stloc_2, operand, out result);
-                return ret;
-            }
-
-            if (opCode == OpCodes.Ldloc_3)
-            {
-                var ret = TryGetLocalConstValue(instruction, OpCodes.Stloc_3, operand, out result);
-                return ret;
-            }
-
-            if (opCode == OpCodes.Ldloc_S)
-            {
-                var ret = TryGetLocalConstValue(instruction, OpCodes.Stloc_S, operand, out result);
-                return ret;
-            }
-
-            if (opCode == OpCodes.Ldloc)
-            {
-                var ret = TryGetLocalConstValue(instruction, OpCodes.Stloc, operand, out result);
-                return ret;
-            }
-
             result = null;
             return false;
-        }
-
-        public static bool TryGetLocalConstValue(Instruction instruction, OpCode opCode, object operand, out object result)
-        {
-            var stloc = instruction.Previous;
-            while (stloc.OpCode != opCode || stloc.Operand != operand)
-            {
-                stloc = stloc.Previous;
-                if (stloc == null)
-                {
-                    result = null;
-                    return false;
-                }
-            }
-
-            var value = stloc.Previous;
-            var ret = TryGetConstValue(ref value, out result);
-            return ret;
         }
 
         public static bool TryGetConstInstructions(ref Instruction instruction, List<Instruction> result)
@@ -1149,7 +1190,7 @@ namespace Katuusagi.ILPostProcessorCommon.Editor
                 opCode == OpCodes.Conv_I8)
             {
                 result.Add(instruction);
-                instruction = instruction.Previous;
+                instruction = instruction.GetPrev();
                 if (!TryGetConstInstructions(ref instruction, result))
                 {
                     return false;
@@ -1167,7 +1208,7 @@ namespace Katuusagi.ILPostProcessorCommon.Editor
                 }
 
                 result.Add(instruction);
-                instruction = instruction.Previous;
+                instruction = instruction.GetPrev();
                 opCode = instruction.OpCode;
                 if (opCode != OpCodes.Ldtoken)
                 {
@@ -1191,60 +1232,125 @@ namespace Katuusagi.ILPostProcessorCommon.Editor
                 return true;
             }
 
-            if (opCode == OpCodes.Ldloc_0)
-            {
-                var ret = TryGetLocalConstInstructions(instruction, OpCodes.Stloc_0, instruction.Operand, result);
-                return ret;
-            }
-
-            if (opCode == OpCodes.Ldloc_1)
-            {
-                var ret = TryGetLocalConstInstructions(instruction, OpCodes.Stloc_1, instruction.Operand, result);
-                return ret;
-            }
-
-            if (opCode == OpCodes.Ldloc_2)
-            {
-                var ret = TryGetLocalConstInstructions(instruction, OpCodes.Stloc_2, instruction.Operand, result);
-                return ret;
-            }
-
-            if (opCode == OpCodes.Ldloc_3)
-            {
-                var ret = TryGetLocalConstInstructions(instruction, OpCodes.Stloc_3, instruction.Operand, result);
-                return ret;
-            }
-
-            if (opCode == OpCodes.Ldloc_S)
-            {
-                var ret = TryGetLocalConstInstructions(instruction, OpCodes.Stloc_S, instruction.Operand, result);
-                return ret;
-            }
-
-            if (opCode == OpCodes.Ldloc)
-            {
-                var ret = TryGetLocalConstInstructions(instruction, OpCodes.Stloc, instruction.Operand, result);
-                return ret;
-            }
-
             return false;
         }
 
-        public static bool TryGetLocalConstInstructions(Instruction instruction, OpCode opCode, object operand, List<Instruction> result)
+        public static VariableDefinition GetVariableFromStloc(Instruction stloc, MethodBody body)
         {
-            var stloc = instruction.Previous;
-            while (stloc.OpCode != opCode || stloc.Operand != operand)
+            var opCode = stloc.OpCode;
+            int index;
+            if (opCode == OpCodes.Stloc_0)
             {
-                stloc = stloc.Previous;
-                if (stloc == null)
-                {
-                    return false;
-                }
+                index = 0;
+            }
+            else if (opCode == OpCodes.Stloc_1)
+            {
+                index = 1;
+            }
+            else if (opCode == OpCodes.Stloc_2)
+            {
+                index = 2;
+            }
+            else if (opCode == OpCodes.Stloc_3)
+            {
+                index = 3;
+            }
+            else if (opCode == OpCodes.Stloc_S)
+            {
+                index = (short)stloc.Operand;
+            }
+            else if (opCode == OpCodes.Stloc)
+            {
+                index = (int)stloc.Operand;
+            }
+            else
+            {
+                return null;
             }
 
-            var value = stloc.Previous;
-            var ret = TryGetConstInstructions(ref value, result);
-            return ret;
+            return body.Variables[index];
+        }
+
+        public static VariableDefinition GetVariableFromLdloc(Instruction ldloc, MethodBody body)
+        {
+            var opCode = ldloc.OpCode;
+            int index;
+            if (opCode == OpCodes.Ldloc_0)
+            {
+                index = 0;
+            }
+            else if (opCode == OpCodes.Ldloc_1)
+            {
+                index = 1;
+            }
+            else if (opCode == OpCodes.Ldloc_2)
+            {
+                index = 2;
+            }
+            else if (opCode == OpCodes.Ldloc_3)
+            {
+                index = 3;
+            }
+            else if (opCode == OpCodes.Ldloc_S ||
+                     opCode == OpCodes.Ldloca_S ||
+                     opCode == OpCodes.Ldloc ||
+                     opCode == OpCodes.Ldloca)
+            {
+                return ldloc.Operand as VariableDefinition;
+            }
+            else
+            {
+                return null;
+            }
+
+            return body.Variables[index];
+        }
+
+        public static ParameterDefinition GetArgumentFromStarg(Instruction starg)
+        {
+            var opCode = starg.OpCode;
+            if (opCode == OpCodes.Starg_S ||
+                opCode == OpCodes.Starg)
+            {
+                return starg.Operand as ParameterDefinition;
+            }
+
+            return null;
+        }
+
+        public static ParameterDefinition GetArgumentFromLdarg(Instruction ldarg, MethodDefinition method)
+        {
+            var opCode = ldarg.OpCode;
+            int index;
+            if (opCode == OpCodes.Ldarg_0)
+            {
+                index = 0;
+            }
+            else if (opCode == OpCodes.Ldarg_1)
+            {
+                index = 1;
+            }
+            else if (opCode == OpCodes.Ldarg_2)
+            {
+                index = 2;
+            }
+            else if (opCode == OpCodes.Ldarg_3)
+            {
+                index = 3;
+            }
+            else if (opCode == OpCodes.Ldarg_S ||
+                     opCode == OpCodes.Ldarga_S ||
+                     opCode == OpCodes.Ldarg ||
+                     opCode == OpCodes.Ldarga)
+            {
+                return ldarg.Operand as ParameterDefinition;
+            }
+            else
+            {
+                return null;
+            }
+
+            return method.Parameters[index];
         }
 
         public static IEnumerable<System.Reflection.MethodInfo> FindMethods<T>(System.Reflection.Assembly assembly)
@@ -1696,6 +1802,45 @@ namespace Katuusagi.ILPostProcessorCommon.Editor
         {
             var result = self.FullName == "System.String";
             return result;
+        }
+
+        public static bool IsStruct(this TypeReference typeRef)
+        {
+            if (typeRef.IsPrimitive)
+            {
+                return true;
+            }
+
+            if (typeRef.IsGenericParameter)
+            {
+                return false;
+            }
+
+            var typeDef = typeRef.Resolve();
+            if (typeDef == null ||
+                typeDef.IsEnum ||
+                typeDef.IsValueType)
+            {
+                return true;
+            }
+
+            return false;
+        }
+
+        public static bool IsSealed(this TypeReference typeRef)
+        {
+            var typeDef = typeRef.Resolve();
+            if (typeDef == null)
+            {
+                return false;
+            }
+
+            if (typeDef.IsSealed)
+            {
+                return true;
+            }
+
+            return false;
         }
 
         public static SequencePoint GetSequencePoint(this MemberReference memberRef)
@@ -4002,6 +4147,127 @@ namespace Katuusagi.ILPostProcessorCommon.Editor
             else if (opCode == OpCodes.Leave)
                 return OpCodes.Leave;
             return opCode;
+        }
+
+        public static bool TryGetPushArgumentInstruction(this Instruction call, int argNumber, out Instruction arg)
+        {
+            arg = null;
+            if (call.OpCode != OpCodes.Call &&
+                call.OpCode != OpCodes.Callvirt)
+            {
+                return false;
+            }
+
+            if (!(call.Operand is MethodReference method))
+            {
+                return false;
+            }
+
+            return TryGetStackPushedInstruction(call, argNumber - method.Parameters.Count, out arg);
+        }
+
+        public static bool TryGetStackPushedInstruction(this Instruction call, int targetRelativeStackCount, out Instruction result)
+        {
+            result = null;
+            var stackCount = 0;
+            var instruction = GetPrev(call);
+            while (instruction != null)
+            {
+                var pushCount = instruction.OpCode.GetPushCount();
+                var beforeStackCount = stackCount;
+                stackCount -= pushCount;
+                if (beforeStackCount > targetRelativeStackCount && targetRelativeStackCount >= stackCount)
+                {
+                    result = instruction;
+                    return true;
+                }
+
+                var popCount = instruction.OpCode.GetPopCount();
+                if (popCount == -1)
+                {
+                    return false;
+                }
+                stackCount += popCount;
+                instruction = instruction.GetPrev();
+            }
+
+            return false;
+        }
+
+        public static int GetPushCount(this OpCode opCode)
+        {
+            switch (opCode.StackBehaviourPush)
+            {
+                case StackBehaviour.Push0:
+                    return 0;
+                case StackBehaviour.Push1:
+                case StackBehaviour.Pushi:
+                case StackBehaviour.Pushi8:
+                case StackBehaviour.Pushr4:
+                case StackBehaviour.Pushr8:
+                case StackBehaviour.Pushref:
+                    return 1;
+                case StackBehaviour.Push1_push1:
+                    return 2;
+            }
+            return 0;
+        }
+
+        public static int GetPopCount(this OpCode opCode)
+        {
+            switch (opCode.StackBehaviourPop)
+            {
+                case StackBehaviour.Pop0:
+                    return 0;
+                case StackBehaviour.Pop1:
+                case StackBehaviour.Popi:
+                case StackBehaviour.Popref:
+                case StackBehaviour.Popref_pop1:
+                    return 1;
+                case StackBehaviour.Pop1_pop1:
+                case StackBehaviour.Popi_pop1:
+                case StackBehaviour.Popi_popi:
+                case StackBehaviour.Popi_popi8:
+                case StackBehaviour.Popi_popr4:
+                case StackBehaviour.Popi_popr8:
+                case StackBehaviour.Popref_popi:
+                    return 2;
+                case StackBehaviour.Popi_popi_popi:
+                case StackBehaviour.Popref_popi_popi:
+                case StackBehaviour.Popref_popi_popi8:
+                case StackBehaviour.Popref_popi_popr4:
+                case StackBehaviour.Popref_popi_popr8:
+                case StackBehaviour.Popref_popi_popref:
+                    return 3;
+                case StackBehaviour.PopAll:
+                    return -1;
+            }
+
+            return 0;
+        }
+
+        public static Instruction GetNext(this Instruction instruction)
+        {
+            var result = instruction.Next;
+            while (result != null &&
+                   result.OpCode == OpCodes.Nop)
+            {
+                result = result.Next;
+            }
+
+            return result;
+        }
+
+        public static Instruction GetPrev(this Instruction instruction)
+        {
+            var result = instruction.Previous;
+            while (result != null &&
+                   result.OpCode == OpCodes.Nop)
+            {
+                result = result.Previous;
+            }
+
+            return result;
         }
     }
 }
