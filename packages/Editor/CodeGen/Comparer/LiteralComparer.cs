@@ -1,42 +1,48 @@
+using System;
 using System.Collections.Generic;
 using System.Linq;
 
 namespace Katuusagi.ILPostProcessorCommon.Editor
 {
-    public class LiteralComparer : IEqualityComparer<object>
+    public class LiteralComparer : IEqualityComparer<(Type t, object o)>
     {
         public const int Prime = 31;
         public static readonly LiteralComparer Default = new LiteralComparer();
 
-        public new bool Equals(object x, object y)
+        public bool Equals((Type t, object o) x, (Type t, object o) y)
         {
-            if (x.GetType() != y.GetType())
+            if (x.t != y.t ||
+                x.o.GetType() != y.o.GetType())
             {
                 return false;
             }
 
-            if (x is IReadOnlyArray xe &&
-                y is IReadOnlyArray ye)
+            if (x.o is IReadOnlyArray xe &&
+                y.o is IReadOnlyArray ye)
             {
-                return xe.Cast<object>().SequenceEqual(ye.Cast<object>(), Default);
+                var xs = xe.Cast<object>().Select(v => (v.GetType(), v));
+                var ys = ye.Cast<object>().Select(v => (v.GetType(), v));
+
+                return xs.SequenceEqual(ys, Default);
             }
 
-            return x.Equals(y);
+            return x.o.Equals(y.o);
         }
 
-        bool IEqualityComparer<object>.Equals(object x, object y)
+        bool IEqualityComparer<(Type t, object o)>.Equals((Type t, object o) x, (Type t, object o) y)
         {
             return Equals(x, y);
         }
 
-        public int GetHashCode(object obj)
+        public int GetHashCode((Type t, object o) obj)
         {
-            if (!(obj is IReadOnlyArray oe))
+            int hash = obj.t.GetType().GetHashCode();
+
+            if (!(obj.o is IReadOnlyArray oe))
             {
-                return obj.GetHashCode();
+                return hash ^ obj.o.GetHashCode();
             }
 
-            int hash = 1;
             foreach (object o in oe)
             {
                 hash = hash * Prime + o.GetHashCode();

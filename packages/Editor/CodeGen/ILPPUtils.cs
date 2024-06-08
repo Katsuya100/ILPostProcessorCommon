@@ -105,7 +105,7 @@ namespace Katuusagi.ILPostProcessorCommon.Editor
         public static AssemblyDefinition LoadAssemblyDefinition(ICompiledAssembly compiledAssembly)
         {
             var resolver = new PostProcessorAssemblyResolver(compiledAssembly);
-            var readerParameters = new ReaderParameters
+            var readerParameters = new ReaderParameters()
             {
                 SymbolStream = new MemoryStream(compiledAssembly.InMemoryAssembly.PdbData.ToArray()),
                 SymbolReaderProvider = new PortablePdbReaderProvider(),
@@ -135,11 +135,11 @@ namespace Katuusagi.ILPostProcessorCommon.Editor
                 var isShortSize = IsShortSize(instruction, target);
                 if (isShortSize)
                 {
-                    instruction.OpCode = SwitchLongOpCode(instruction.OpCode);
+                    instruction.OpCode = SwitchToShortJump(instruction.OpCode);
                 }
                 else
                 {
-                    instruction.OpCode = SwitchShortOpCode(instruction.OpCode);
+                    instruction.OpCode = SwitchToLongJump(instruction.OpCode);
                 }
             }
         }
@@ -336,6 +336,11 @@ namespace Katuusagi.ILPostProcessorCommon.Editor
 
         public static Instruction LoadLiteral(object literalValue)
         {
+            if (literalValue == null)
+            {
+                return Instruction.Create(OpCodes.Ldnull);
+            }
+
             var literalType = literalValue.GetType();
             if (literalValue is Enum enumValue)
             {
@@ -573,38 +578,21 @@ namespace Katuusagi.ILPostProcessorCommon.Editor
             return Instruction.Create(OpCodes.Stloc, variable);
         }
 
-
-        public static bool TryGetConstValue<T>(ref Instruction instruction, out T result)
+        public static bool TryCast(Type type, object value, out object result)
         {
-            if (TryGetConstValue(ref instruction, out object r) &&
-                r is T resultValue)
+            result = value;
+            if (value == null)
             {
-                result = resultValue;
+                return !type.IsValueType;
+            }
+
+            var valueType = value.GetType();
+            if (type.IsAssignableFrom(valueType))
+            {
                 return true;
             }
 
-            result = default;
-            return false;
-        }
-
-        public static bool TryGetConstValue(ref Instruction instruction, Type type, out object result)
-        {
-            if (!TryGetConstValue(ref instruction, out result))
-            {
-                return false;
-            }
-
-            if (result is string)
-            {
-                if (type == typeof(string))
-                {
-                    return true;
-                }
-
-                return false;
-            }
-
-            if (result is int intValue)
+            if (value is int intValue)
             {
                 if (type == typeof(bool))
                 {
@@ -633,11 +621,6 @@ namespace Katuusagi.ILPostProcessorCommon.Editor
                 if (type == typeof(ushort))
                 {
                     result = (ushort)intValue;
-                    return true;
-                }
-
-                if (type == typeof(int))
-                {
                     return true;
                 }
 
@@ -686,7 +669,7 @@ namespace Katuusagi.ILPostProcessorCommon.Editor
                 return false;
             }
 
-            if (result is long longValue)
+            if (value is long longValue)
             {
                 if (type == typeof(bool))
                 {
@@ -768,7 +751,7 @@ namespace Katuusagi.ILPostProcessorCommon.Editor
                 return false;
             }
 
-            if (result is float floatValue)
+            if (value is float floatValue)
             {
                 if (type == typeof(bool))
                 {
@@ -824,11 +807,6 @@ namespace Katuusagi.ILPostProcessorCommon.Editor
                     return true;
                 }
 
-                if (type == typeof(float))
-                {
-                    return true;
-                }
-
                 if (type == typeof(double))
                 {
                     result = (double)floatValue;
@@ -844,7 +822,7 @@ namespace Katuusagi.ILPostProcessorCommon.Editor
                 return false;
             }
 
-            if (result is double doubleValue)
+            if (value is double doubleValue)
             {
                 if (type == typeof(bool))
                 {
@@ -906,11 +884,6 @@ namespace Katuusagi.ILPostProcessorCommon.Editor
                     return true;
                 }
 
-                if (type == typeof(double))
-                {
-                    return true;
-                }
-
                 if (type == typeof(char))
                 {
                     result = (char)doubleValue;
@@ -923,279 +896,333 @@ namespace Katuusagi.ILPostProcessorCommon.Editor
             return false;
         }
 
-        public static bool TryGetConstValue(ref Instruction instruction, out object result)
+        public static bool TryGetConstValue<T>(this Instruction instruction, out T value, List<Instruction> instructions = null)
+        {
+            if (instruction.TryGetConstValue(typeof(T), out object r, instructions) &&
+                r is T resultValue)
+            {
+                value = resultValue;
+                return true;
+            }
+
+            value = default;
+            return false;
+        }
+
+        public static bool TryGetConstValue(this Instruction instruction, Type type, out object value, List<Instruction> instructions = null)
+        {
+            if (!instruction.TryGetConstValue(out value, instructions))
+            {
+                return false;
+            }
+
+            return TryCast(type, value, out value);
+        }
+
+        public static bool TryGetConstValue(this Instruction instruction, out object value, List<Instruction> instructions = null)
         {
             var opCode = instruction.OpCode;
             var operand = instruction.Operand;
+            if (opCode == OpCodes.Ldnull)
+            {
+                instructions?.Add(instruction);
+                value = null;
+                return true;
+            }
+
             if (opCode == OpCodes.Ldstr)
             {
+                instructions?.Add(instruction);
                 if (operand is string)
                 {
-                    result = operand;
+                    value = operand;
                     return true;
                 }
 
-                result = operand.ToString();
+                value = operand.ToString();
                 return true;
             }
             if (opCode == OpCodes.Ldc_I4_0)
             {
-                result = 0;
+                instructions?.Add(instruction);
+                value = 0;
                 return true;
             }
             if (opCode == OpCodes.Ldc_I4_1)
             {
-                result = 1;
+                instructions?.Add(instruction);
+                value = 1;
                 return true;
             }
             if (opCode == OpCodes.Ldc_I4_2)
             {
-                result = 2;
+                instructions?.Add(instruction);
+                value = 2;
                 return true;
             }
             if (opCode == OpCodes.Ldc_I4_3)
             {
-                result = 3;
+                instructions?.Add(instruction);
+                value = 3;
                 return true;
             }
             if (opCode == OpCodes.Ldc_I4_4)
             {
-                result = 4;
+                instructions?.Add(instruction);
+                value = 4;
                 return true;
             }
             if (opCode == OpCodes.Ldc_I4_5)
             {
-                result = 5;
+                instructions?.Add(instruction);
+                value = 5;
                 return true;
             }
             if (opCode == OpCodes.Ldc_I4_6)
             {
-                result = 6;
+                instructions?.Add(instruction);
+                value = 6;
                 return true;
             }
             if (opCode == OpCodes.Ldc_I4_7)
             {
-                result = 7;
+                instructions?.Add(instruction);
+                value = 7;
                 return true;
             }
             if (opCode == OpCodes.Ldc_I4_8)
             {
-                result = 8;
+                instructions?.Add(instruction);
+                value = 8;
                 return true;
             }
             if (opCode == OpCodes.Ldc_I4_M1)
             {
-                result = -1;
+                instructions?.Add(instruction);
+                value = -1;
                 return true;
             }
             if (opCode == OpCodes.Ldc_I4_S || opCode == OpCodes.Ldc_I4)
             {
+                instructions?.Add(instruction);
                 if (operand is int)
                 {
-                    result = operand;
+                    value = operand;
                     return true;
                 }
 
-                result = int.Parse(operand.ToString());
+                value = int.Parse(operand.ToString());
                 return true;
             }
 
             if (opCode == OpCodes.Ldc_I8)
             {
+                instructions?.Add(instruction);
                 if (operand is long)
                 {
-                    result = operand;
+                    value = operand;
                     return true;
                 }
 
-                result = long.Parse(operand.ToString());
+                value = long.Parse(operand.ToString());
                 return true;
             }
 
             if (opCode == OpCodes.Ldc_R4)
             {
+                instructions?.Add(instruction);
                 if (operand is float)
                 {
-                    result = operand;
+                    value = operand;
                     return true;
                 }
 
-                result = float.Parse(operand.ToString());
+                value = float.Parse(operand.ToString());
                 return true;
             }
 
             if (opCode == OpCodes.Ldc_R8)
             {
+                instructions?.Add(instruction);
                 if (operand is double)
                 {
-                    result = operand;
+                    value = operand;
                     return true;
                 }
 
-                result = double.Parse(operand.ToString());
+                value = double.Parse(operand.ToString());
+                return true;
+            }
+
+            if (opCode == OpCodes.Ldtoken)
+            {
+                instructions?.Add(instruction);
+                value = instruction.Operand;
                 return true;
             }
 
             if (opCode == OpCodes.Conv_I1)
             {
-                instruction = instruction.GetPrev();
-                if (!TryGetConstValue(ref instruction, out result))
+                if (!instruction.TryGetStackPushedInstruction(-1, out var prev))
+                {
+                    value = null;
+                    return false;
+                }
+
+                if (!prev.TryGetConstValue(out value, instructions))
                 {
                     return false;
                 }
 
-                if (result is int intValue)
+                instructions?.Add(instruction);
+                if (value is int intValue)
                 {
-                    result = (sbyte)intValue;
+                    value = (sbyte)intValue;
                     return true;
                 }
-                if (result is long longValue)
+                if (value is long longValue)
                 {
-                    result = (sbyte)longValue;
+                    value = (sbyte)longValue;
                     return true;
                 }
-                if (result is float floatValue)
+                if (value is float floatValue)
                 {
-                    result = (sbyte)floatValue;
+                    value = (sbyte)floatValue;
                     return true;
                 }
-                if (result is double doubleValue)
+                if (value is double doubleValue)
                 {
-                    result = (sbyte)doubleValue;
+                    value = (sbyte)doubleValue;
                     return true;
                 }
+                return true;
             }
 
             if (opCode == OpCodes.Conv_I2)
             {
-                instruction = instruction.GetPrev();
-                if (!TryGetConstValue(ref instruction, out result))
+                if (!instruction.TryGetStackPushedInstruction(-1, out var prev))
+                {
+                    value = null;
+                    return false;
+                }
+
+                if (!prev.TryGetConstValue(out value, instructions))
                 {
                     return false;
                 }
 
-                if (result is int intValue)
+                instructions?.Add(instruction);
+                if (value is int intValue)
                 {
-                    result = (short)intValue;
+                    value = (short)intValue;
                     return true;
                 }
-                if (result is long longValue)
+                if (value is long longValue)
                 {
-                    result = (short)longValue;
+                    value = (short)longValue;
                     return true;
                 }
-                if (result is float floatValue)
+                if (value is float floatValue)
                 {
-                    result = (short)floatValue;
+                    value = (short)floatValue;
                     return true;
                 }
-                if (result is double doubleValue)
+                if (value is double doubleValue)
                 {
-                    result = (short)doubleValue;
+                    value = (short)doubleValue;
                     return true;
                 }
+                return true;
             }
 
             if (opCode == OpCodes.Conv_I4)
             {
-                instruction = instruction.GetPrev();
-                if (!TryGetConstValue(ref instruction, out result))
+                if (!instruction.TryGetStackPushedInstruction(-1, out var prev))
+                {
+                    value = null;
+                    return false;
+                }
+
+                if (!prev.TryGetConstValue(out value, instructions))
                 {
                     return false;
                 }
 
-                if (result is int intValue)
+                instructions?.Add(instruction);
+                if (value is int intValue)
                 {
-                    result = intValue;
+                    value = intValue;
                     return true;
                 }
-                if (result is long longValue)
+                if (value is long longValue)
                 {
-                    result = (int)longValue;
+                    value = (int)longValue;
                     return true;
                 }
-                if (result is float floatValue)
+                if (value is float floatValue)
                 {
-                    result = (int)floatValue;
+                    value = (int)floatValue;
                     return true;
                 }
-                if (result is double doubleValue)
+                if (value is double doubleValue)
                 {
-                    result = (int)doubleValue;
+                    value = (int)doubleValue;
                     return true;
                 }
+                return true;
             }
 
             if (opCode == OpCodes.Conv_I8)
             {
-                instruction = instruction.GetPrev();
-                if (!TryGetConstValue(ref instruction, out result))
+                if (!instruction.TryGetStackPushedInstruction(-1, out var prev))
+                {
+                    value = null;
+                    return false;
+                }
+
+                if (!prev.TryGetConstValue(out value, instructions))
                 {
                     return false;
                 }
 
-                if (result is int intValue)
+                instructions?.Add(instruction);
+                if (value is int intValue)
                 {
-                    result = (long)intValue;
+                    value = (long)intValue;
                     return true;
                 }
-                if (result is long longValue)
+                if (value is long longValue)
                 {
-                    result = longValue;
+                    value = longValue;
                     return true;
                 }
-                if (result is float floatValue)
+                if (value is float floatValue)
                 {
-                    result = (long)floatValue;
+                    value = (long)floatValue;
                     return true;
                 }
-                if (result is double doubleValue)
+                if (value is double doubleValue)
                 {
-                    result = (long)doubleValue;
+                    value = (long)doubleValue;
                     return true;
                 }
-            }
-
-            result = null;
-            return false;
-        }
-
-        public static bool TryGetConstInstructions(ref Instruction instruction, List<Instruction> result)
-        {
-            var opCode = instruction.OpCode;
-            if (opCode == OpCodes.Ldstr ||
-                opCode == OpCodes.Ldc_I4_0 ||
-                opCode == OpCodes.Ldc_I4_1 ||
-                opCode == OpCodes.Ldc_I4_2 ||
-                opCode == OpCodes.Ldc_I4_3 ||
-                opCode == OpCodes.Ldc_I4_4 ||
-                opCode == OpCodes.Ldc_I4_5 ||
-                opCode == OpCodes.Ldc_I4_6 ||
-                opCode == OpCodes.Ldc_I4_7 ||
-                opCode == OpCodes.Ldc_I4_8 ||
-                opCode == OpCodes.Ldc_I4_M1 ||
-                opCode == OpCodes.Ldc_I4_S ||
-                opCode == OpCodes.Ldc_I4 ||
-                opCode == OpCodes.Ldc_I8 ||
-                opCode == OpCodes.Ldc_R4 ||
-                opCode == OpCodes.Ldc_R8)
-            {
-                result.Add(instruction);
                 return true;
             }
 
-            if (opCode == OpCodes.Conv_I1 ||
-                opCode == OpCodes.Conv_I2 ||
-                opCode == OpCodes.Conv_I4 ||
-                opCode == OpCodes.Conv_I8)
+            if (opCode == OpCodes.Box)
             {
-                result.Add(instruction);
-                instruction = instruction.GetPrev();
-                if (!TryGetConstInstructions(ref instruction, result))
+                if (!instruction.TryGetStackPushedInstruction(-1, out var prev))
+                {
+                    value = null;
+                    return false;
+                }
+
+                if (!prev.TryGetConstValue(out value, instructions))
                 {
                     return false;
                 }
 
+                instructions?.Add(instruction);
                 return true;
             }
 
@@ -1204,18 +1231,16 @@ namespace Katuusagi.ILPostProcessorCommon.Editor
                 var method = instruction.Operand as MethodReference;
                 if (method.FullName != "System.Type System.Type::GetTypeFromHandle(System.RuntimeTypeHandle)")
                 {
+                    value = null;
                     return false;
                 }
 
-                result.Add(instruction);
-                instruction = instruction.GetPrev();
-                opCode = instruction.OpCode;
-                if (opCode != OpCodes.Ldtoken)
+                if (!instruction.TryGetPushConstArgumentInstructions(0, out value, instructions))
                 {
                     return false;
                 }
 
-                result.Add(instruction);
+                instructions?.Add(instruction);
                 return true;
             }
 
@@ -1223,15 +1248,18 @@ namespace Katuusagi.ILPostProcessorCommon.Editor
             {
                 var field = instruction.Operand as FieldReference;
                 var declaringTypeName = field.DeclaringType.Name;
-                if (declaringTypeName != "$$StaticTable" && declaringTypeName != "$$ConstTable")
+                if (declaringTypeName != "$$ConstTable" && !declaringTypeName.StartsWith("$$StaticTable_", StringComparison.Ordinal))
                 {
+                    value = null;
                     return false;
                 }
 
-                result.Add(instruction);
+                value = field;
+                instructions?.Add(instruction);
                 return true;
             }
 
+            value = null;
             return false;
         }
 
@@ -1405,6 +1433,134 @@ namespace Katuusagi.ILPostProcessorCommon.Editor
             return $"{GetTypeName(member.DeclaringType)}.{member.Name}";
         }
 
+        public static bool IsStatic(this MemberReference member)
+        {
+            {
+                if (member is FieldDefinition field)
+                {
+                    return field.IsStatic;
+                }
+
+                if (member is PropertyDefinition property)
+                {
+                    return (property.GetMethod?.IsStatic ?? false) ||
+                           (property.SetMethod?.IsStatic ?? false) ||
+                           (property.OtherMethods?.Any(v => v.IsStatic) ?? false);
+                }
+
+                if (member is MethodDefinition method)
+                {
+                    return method.IsStatic;
+                }
+
+                if (member is EventDefinition @event)
+                {
+                    return (@event.AddMethod?.IsStatic ?? false) ||
+                           (@event.RemoveMethod?.IsStatic ?? false) ||
+                           (@event.OtherMethods?.Any(v => v.IsStatic) ?? false);
+                }
+            }
+            {
+                if (member is FieldReference field)
+                {
+                    return field.Resolve().IsStatic;
+                }
+
+                if (member is PropertyReference property)
+                {
+                    var p = property.Resolve();
+                    return (p.GetMethod?.IsStatic ?? false) ||
+                           (p.SetMethod?.IsStatic ?? false) ||
+                           (p.OtherMethods?.Any(v => v.IsStatic) ?? false);
+                }
+
+                if (member is MethodReference method)
+                {
+                    return method.Resolve().IsStatic;
+                }
+
+                if (member is EventDefinition @event)
+                {
+                    var e = @event.Resolve();
+                    return (e.AddMethod?.IsStatic ?? false) ||
+                           (e.RemoveMethod?.IsStatic ?? false) ||
+                           (e.OtherMethods?.Any(v => v.IsStatic) ?? false);
+                }
+            }
+
+            return false;
+        }
+
+        public static bool IsPublic(this MemberReference member)
+        {
+            {
+                if (member is TypeDefinition type)
+                {
+                    return type.IsPublic || type.IsNestedPublic;
+                }
+
+                if (member is FieldDefinition field)
+                {
+                    return field.IsPublic;
+                }
+
+                if (member is PropertyDefinition property)
+                {
+                    
+                    return (property.GetMethod?.IsPublic ?? false) ||
+                           (property.SetMethod?.IsPublic ?? false) ||
+                           (property.OtherMethods?.Any(v => v.IsPublic) ?? false);
+                }
+
+                if (member is MethodDefinition method)
+                {
+                    return method.IsPublic;
+                }
+
+                if (member is EventDefinition @event)
+                {
+                    return (@event.AddMethod?.IsPublic ?? false) ||
+                           (@event.RemoveMethod?.IsPublic ?? false) ||
+                           (@event.OtherMethods?.Any(v => v.IsPublic) ?? false);
+                }
+            }
+            {
+                if (member is TypeReference type)
+                {
+                    var typeRef = type.Resolve();
+                    return typeRef.IsPublic || typeRef.IsNestedPublic;
+                }
+
+                if (member is FieldReference field)
+                {
+                    return field.Resolve().IsPublic;
+                }
+
+                if (member is PropertyReference property)
+                {
+                    var p = property.Resolve();
+                    return (p.GetMethod?.IsPublic ?? false) ||
+                           (p.SetMethod?.IsPublic ?? false) ||
+                           (p.OtherMethods?.Any(v => v.IsPublic) ?? false);
+                }
+
+                if (member is MethodReference method)
+                {
+                    return method.Resolve().IsPublic;
+                }
+
+                if (member is EventDefinition @event)
+                {
+                    var e = @event.Resolve();
+                    return (e.AddMethod?.IsPublic ?? false) ||
+                           (e.RemoveMethod?.IsPublic ?? false) ||
+                           (e.OtherMethods?.Any(v => v.IsPublic) ?? false);
+                }
+            }
+
+            return false;
+        }
+
         public static string GetTypeName(Type type)
         {
             if (type.IsGenericType)
@@ -1458,9 +1614,10 @@ namespace Katuusagi.ILPostProcessorCommon.Editor
                 generic = generic.Remove(generic.Length - 1, 1);
 
                 string parentName;
-                if (type.DeclaringType != null)
+                var declairing = type.GetDeclaringType();
+                if (declairing != null)
                 {
-                    parentName = $"{GetTypeName(type.DeclaringType)}/";
+                    parentName = $"{GetTypeName(declairing)}/";
                 }
                 else
                 {
@@ -1501,7 +1658,7 @@ namespace Katuusagi.ILPostProcessorCommon.Editor
             return $"{GetTypeName(method.DeclaringType)}.{method.Name}({parameters})";
         }
 
-        public static bool IsStructRecursive(Type type)
+        public static bool IsStructRecursive(this Type type)
         {
             if (type.IsPrimitive || type.IsEnum)
             {
@@ -1571,7 +1728,18 @@ namespace Katuusagi.ILPostProcessorCommon.Editor
             return genericInstanceMethod;
         }
 
-        public static IEnumerable<TypeReference> GetGenericArguments(this MethodReference methodRef)
+        public static GenericInstanceType MakeGenericInstanceType(this TypeReference self, IEnumerable<TypeReference> arguments)
+        {
+            GenericInstanceType genericInstanceType = new GenericInstanceType(self);
+            foreach (TypeReference item in arguments)
+            {
+                genericInstanceType.GenericArguments.Add(item);
+            }
+
+            return genericInstanceType;
+        }
+
+        public static IList<TypeReference> GetGenericArguments(this MethodReference methodRef)
         {
             if (!(methodRef is GenericInstanceMethod genMethod))
             {
@@ -1581,7 +1749,7 @@ namespace Katuusagi.ILPostProcessorCommon.Editor
             return genMethod.GenericArguments;
         }
 
-        public static IEnumerable<TypeReference> GetGenericArguments(this TypeReference typeRef)
+        public static IList<TypeReference> GetGenericArguments(this TypeReference typeRef)
         {
             if (!(typeRef is GenericInstanceType genType))
             {
@@ -1598,38 +1766,54 @@ namespace Katuusagi.ILPostProcessorCommon.Editor
                 return type.NestedTypes;
             }
 
-            var genArgs = genType.GenericArguments.ToArray();
-            return type.NestedTypes.Where(v => v.GenericParameters.Count == genArgs.Length)
+            var genArgs = genType.GenericArguments;
+            return type.NestedTypes.Where(v => v.GenericParameters.Count == genArgs.Count)
                                       .Select(v2 => v2.GetElementType().MakeGenericInstanceType(genArgs))
                                       .OfType<TypeReference>();
         }
 
-        public static TypeReference GetDeclairingType(this TypeReference typeRef)
+        public static TypeReference GetDeclaringType(this TypeReference typeRef)
         {
             if (typeRef.DeclaringType == null)
             {
                 return null;
             }
 
-            if (!(typeRef is GenericInstanceType genType))
+            if (typeRef.IsGenericDefinition())
             {
-                return typeRef.DeclaringType;
+                var def = typeRef.DeclaringType.Resolve();
+                if (def == null)
+                {
+                    return typeRef.DeclaringType.GetElementType();
+                }
+                return def;
             }
 
-            if (!(typeRef is TypeDefinition type))
+            if (typeRef is GenericInstanceType genType)
             {
-                type = typeRef.Resolve();
+                TypeReference type = typeRef.Resolve();
+                if (type == null)
+                {
+                    type = typeRef.GetElementType();
+                }
+
+                TypeReference declaringType = type.DeclaringType.Resolve();
+                if (declaringType == null)
+                {
+                    declaringType = type.DeclaringType.GetElementType();
+                }
+
+                var genArgs = genType.GenericArguments;
+                var declairingGenArgs = genArgs.Take(declaringType.GenericParameters.Count);
+                if (!declairingGenArgs.Any())
+                {
+                    return typeRef.DeclaringType;
+                }
+
+                return declaringType.MakeGenericInstanceType(declairingGenArgs);
             }
 
-            var declairingType = type.DeclaringType.GetElementType();
-            var genArgs = genType.GenericArguments;
-            var declairingGenArgs = genArgs.Take(declairingType.GenericParameters.Count).ToArray();
-            if (!declairingGenArgs.Any())
-            {
-                return typeRef.DeclaringType;
-            }
-
-            return declairingType.MakeGenericInstanceType(declairingGenArgs);
+            return typeRef.DeclaringType;
         }
 
         public static IEnumerable<FieldDefinition> GetFields(this TypeReference self)
@@ -1703,22 +1887,24 @@ namespace Katuusagi.ILPostProcessorCommon.Editor
                 src is GenericInstanceType genType)
             {
                 bool isReplaced = false;
-                var genArgs = new TypeReference[genType.GenericArguments.Count];
-                for (int i = 0; i < genArgs.Length; ++i)
+                using (ThreadStaticArrayPool.Get<TypeReference>(out var genArgs, genType.GenericArguments.Count))
                 {
-                    if (typeRef.TryReplaceGenericParameter(genType.GenericArguments[i], out genArgs[i]))
+                    for (int i = 0; i < genArgs.Length; ++i)
                     {
-                        isReplaced = true;
+                        if (typeRef.TryReplaceGenericParameter(genType.GenericArguments[i], out genArgs[i]))
+                        {
+                            isReplaced = true;
+                        }
                     }
-                }
 
-                if (!isReplaced)
-                {
-                    return false;
-                }
+                    if (!isReplaced)
+                    {
+                        return false;
+                    }
 
-                result = genType.DeclaringType.MakeGenericInstanceType(genArgs);
-                return true;
+                    result = genType.GetDeclaringType().MakeGenericInstanceType(genArgs);
+                    return true;
+                }
             }
 
             return false;
@@ -1742,7 +1928,7 @@ namespace Katuusagi.ILPostProcessorCommon.Editor
                 return self;
             }
 
-            return self.MakeGenericInstanceType(self.GenericParameters.ToArray());
+            return self.MakeGenericInstanceType(self.GenericParameters);
         }
 
         public static TypeReference ResolveVirtualElementType(this TypeReference self)
@@ -1841,6 +2027,342 @@ namespace Katuusagi.ILPostProcessorCommon.Editor
             }
 
             return false;
+        }
+
+        public static void CreateTypeParameters(ModuleDefinition module, TypeReference typeRef, Dictionary<GenericParameter, TypeReference> typeParameter)
+        {
+            if (!(typeRef is GenericInstanceType genType))
+            {
+                return;
+            }
+
+            var genParams = genType.ElementType.GenericParameters;
+            var genArgs = genType.GenericArguments;
+            for (int i = 0; i < genParams.Count; ++i)
+            {
+                var genParam = genParams[i];
+                var genArg = ReplaceGeneric(module, genArgs[i], typeParameter);
+
+                typeParameter[genParam] = genArg;
+            }
+
+            var resolved = genType.Resolve();
+            if (resolved != null)
+            {
+                genParams = resolved.GenericParameters;
+                for (int i = 0; i < genParams.Count; ++i)
+                {
+                    var genParam = genParams[i];
+                    var genArg = ReplaceGeneric(module, genArgs[i], typeParameter);
+
+                    typeParameter[genParam] = genArg;
+                }
+            }
+        }
+
+        public static void CreateTypeParameters(ModuleDefinition module, MethodReference methodRef, Dictionary<GenericParameter, TypeReference> typeParameter)
+        {
+            CreateTypeParameters(module, methodRef.DeclaringType, typeParameter);
+            if (!(methodRef is GenericInstanceMethod genMethod))
+            {
+                return;
+            }
+
+            var genParams = genMethod.ElementMethod.GenericParameters;
+            var genArgs = genMethod.GenericArguments;
+            for (int i = 0; i < genParams.Count; ++i)
+            {
+                var genParam = genParams[i];
+                var genArg = ReplaceGeneric(module, genArgs[i], typeParameter);
+
+                typeParameter[genParam] = genArg;
+            }
+
+            var resolved = genMethod.Resolve();
+            if (resolved != null)
+            {
+                genParams = resolved.GenericParameters;
+                for (int i = 0; i < genParams.Count; ++i)
+                {
+                    var genParam = genParams[i];
+                    var genArg = ReplaceGeneric(module, genArgs[i], typeParameter);
+
+                    typeParameter[genParam] = genArg;
+                }
+            }
+        }
+
+        public static TypeReference ReplaceGeneric(ModuleDefinition module, TypeReference type, Dictionary<GenericParameter, TypeReference> typeParameters)
+        {
+            if (typeParameters == null)
+            {
+                return Import(module, type);
+            }
+
+            if (!type.ContainsGenericParameter)
+            {
+                return Import(module, type);
+            }
+
+            if (type is GenericParameter genParam)
+            {
+                if (!typeParameters.TryGetValue(genParam, out var replaced))
+                {
+                    return Import(module, type);
+                }
+
+                return Import(module, replaced);
+            }
+
+            if (type is GenericInstanceType genType)
+            {
+                var genArgs = genType.GenericArguments.Select(v => ReplaceGeneric(module, v, typeParameters));
+                var elementType = Import(module, genType.GetElementType());
+                var maked = elementType.MakeGenericInstanceType(genArgs);
+                return Import(module, maked);
+            }
+
+            if (type is ArrayType arrayType)
+            {
+                var elementType = Import(module, ReplaceGeneric(module, arrayType.ElementType, typeParameters));
+                var result = elementType.MakeArrayType();
+                if (arrayType.IsVector)
+                {
+                    return result;
+                }
+
+                var dimensions = result.Dimensions;
+                dimensions.Clear();
+                foreach (var dimension in arrayType.Dimensions)
+                {
+                    dimensions.Add(dimension);
+                }
+
+                return result;
+            }
+
+            if (type is PointerType pointerType)
+            {
+                return Import(module, ReplaceGeneric(module, pointerType.ElementType, typeParameters).MakePointerType());
+            }
+
+            if (type is ByReferenceType byRefType)
+            {
+                return Import(module, ReplaceGeneric(module, byRefType.ElementType, typeParameters).MakeByReferenceType());
+            }
+
+            if (type is PinnedType pinnedType)
+            {
+                return Import(module, ReplaceGeneric(module, pinnedType.ElementType, typeParameters).MakePinnedType());
+            }
+
+            if (type is SentinelType sentinelType)
+            {
+                return Import(module, ReplaceGeneric(module, sentinelType.ElementType, typeParameters).MakeSentinelType());
+            }
+
+            if (type is RequiredModifierType rmType)
+            {
+                var elementType = ReplaceGeneric(module, rmType.ElementType, typeParameters);
+                var modifierType = ReplaceGeneric(module, rmType.ModifierType, typeParameters);
+                return Import(module, elementType.MakeRequiredModifierType(modifierType));
+            }
+
+            if (type is OptionalModifierType omType)
+            {
+                var elementType = ReplaceGeneric(module, omType.ElementType, typeParameters);
+                var modifierType = ReplaceGeneric(module, omType.ModifierType, typeParameters);
+                return Import(module, elementType.MakeOptionalModifierType(modifierType));
+            }
+
+            if (type is FunctionPointerType fpType)
+            {
+                var result = new FunctionPointerType();
+
+                result.HasThis = fpType.HasThis;
+                result.ExplicitThis = fpType.ExplicitThis;
+                result.CallingConvention = fpType.CallingConvention;
+                result.ReturnType = ReplaceGeneric(module, fpType.ReturnType, typeParameters);
+                foreach (var p in fpType.Parameters)
+                {
+                    var pType = ReplaceGeneric(module, p.ParameterType, typeParameters);
+                    var parameter = new ParameterDefinition(p.Name, p.Attributes, pType);
+                    parameter.Constant = p.Constant;
+                    foreach (var a in parameter.CustomAttributes)
+                    {
+                        parameter.CustomAttributes.Add(a);
+                    }
+                    parameter.MarshalInfo = p.MarshalInfo;
+                    result.Parameters.Add(parameter);
+                }
+
+                return Import(module, result);
+            }
+
+            return Import(module, type);
+        }
+
+        public static MethodReference ReplaceGeneric(ModuleDefinition module, MethodReference method, Dictionary<GenericParameter, TypeReference> typeParameters)
+        {
+            if (typeParameters == null)
+            {
+                return Import(module, method);
+            }
+
+            if (!method.ContainsGenericParameter)
+            {
+                return Import(module, method);
+            }
+
+            if (method is GenericInstanceMethod genMethod)
+            {
+                var elementMethod = genMethod.GetElementMethod();
+                if (elementMethod.DeclaringType.ContainsGenericParameter)
+                {
+                    var declaringType = ReplaceGeneric(module, elementMethod.DeclaringType, typeParameters);
+                    var returnType = Import(module, elementMethod.ReturnType);
+                    var resolvedElementMethod = new MethodReference(elementMethod.Name, returnType, declaringType);
+                    resolvedElementMethod.HasThis = elementMethod.HasThis;
+                    resolvedElementMethod.ExplicitThis = elementMethod.ExplicitThis;
+                    resolvedElementMethod.CallingConvention = elementMethod.CallingConvention;
+
+                    resolvedElementMethod.MethodReturnType.Attributes = elementMethod.MethodReturnType.Attributes;
+                    resolvedElementMethod.MethodReturnType.Constant = elementMethod.MethodReturnType.Constant;
+                    foreach (var a in resolvedElementMethod.MethodReturnType.CustomAttributes)
+                    {
+                        resolvedElementMethod.MethodReturnType.CustomAttributes.Add(a);
+                    }
+                    resolvedElementMethod.MethodReturnType.MarshalInfo = elementMethod.MethodReturnType.MarshalInfo;
+
+                    foreach (var p in elementMethod.Parameters)
+                    {
+                        var parameterType = Import(module, p.ParameterType);
+                        var parameter = new ParameterDefinition(p.Name, p.Attributes, parameterType);
+                        parameter.Constant = p.Constant;
+                        foreach (var a in parameter.CustomAttributes)
+                        {
+                            parameter.CustomAttributes.Add(a);
+                        }
+                        parameter.MarshalInfo = p.MarshalInfo;
+                        resolvedElementMethod.Parameters.Add(parameter);
+                    }
+
+                    foreach (var g in elementMethod.GenericParameters)
+                    {
+                        resolvedElementMethod.GenericParameters.Add(g);
+                    }
+
+                    elementMethod = resolvedElementMethod;
+                }
+
+                var genArgs = genMethod.GenericArguments.Select(v => ReplaceGeneric(module, v, typeParameters));
+                var result = elementMethod.MakeGenericInstanceMethod(genArgs);
+                return module.ImportReference(result);
+            }
+
+            return Import(module, method);
+        }
+
+        public static TypeReference Import(ModuleDefinition module, TypeReference type)
+        {
+            type = type.ResolveVirtualElementType();
+            if (type.IsGenericParameter)
+            {
+                return type;
+            }
+
+            if (type.ContainsGenericParameter)
+            {
+                if (type is GenericInstanceType genType)
+                {
+                    var elementType = Import(module, genType.GetElementType());
+                    var genArgs = genType.GenericArguments.Select(v => Import(module, v));
+                    return elementType.MakeGenericInstanceType(genArgs);
+                }
+
+                if (type is ArrayType arrayType)
+                {
+                    var elementType = Import(module, arrayType.ElementType);
+                    return elementType.MakeArrayType(arrayType.Rank);
+                }
+
+                if (type is PointerType pointerType)
+                {
+                    var elementType = Import(module, pointerType.ElementType);
+                    return elementType.MakePointerType();
+                }
+
+                if (type is ByReferenceType byRefType)
+                {
+                    var elementType = Import(module, byRefType.ElementType);
+                    return elementType.MakeByReferenceType();
+                }
+
+                if (type is PinnedType pinnedType)
+                {
+                    var elementType = Import(module, pinnedType.ElementType);
+                    return elementType.MakePinnedType();
+                }
+
+                if (type is SentinelType sentinelType)
+                {
+                    var elementType = Import(module, sentinelType.ElementType);
+                    return elementType.MakeSentinelType();
+                }
+
+                if (type is RequiredModifierType rmType)
+                {
+                    var elementType = Import(module, rmType.ElementType);
+                    var modifierType = Import(module, rmType.ModifierType);
+                    return elementType.MakeRequiredModifierType(modifierType);
+                }
+
+                if (type is OptionalModifierType omType)
+                {
+                    var elementType = Import(module, omType.ElementType);
+                    var modifierType = Import(module, omType.ModifierType);
+                    return elementType.MakeOptionalModifierType(modifierType);
+                }
+
+                if (type is FunctionPointerType fpType)
+                {
+                    var result = new FunctionPointerType();
+                    result.HasThis = fpType.HasThis;
+                    result.ExplicitThis = fpType.ExplicitThis;
+                    result.CallingConvention = fpType.CallingConvention;
+                    result.ReturnType = Import(module, fpType.ReturnType);
+                    foreach (var p in fpType.Parameters)
+                    {
+                        var pType = Import(module, p.ParameterType);
+                        var parameter = new ParameterDefinition(p.Name, p.Attributes, pType);
+                        parameter.Constant = p.Constant;
+                        foreach (var a in parameter.CustomAttributes)
+                        {
+                            parameter.CustomAttributes.Add(a);
+                        }
+                        parameter.MarshalInfo = p.MarshalInfo;
+                        result.Parameters.Add(parameter);
+                    }
+
+                    return result;
+                }
+            }
+
+            return module.ImportReference(type);
+        }
+
+        public static MethodReference Import(ModuleDefinition module, MethodReference method)
+        {
+            method = method.ResolveVirtualElementMethod();
+            if (method.ContainsGenericParameter &&
+                method is GenericInstanceMethod genMethod)
+            {
+                var elementMethod = genMethod.GetElementMethod();
+                var genArgs = genMethod.GenericArguments.Select(v => Import(module, v));
+                return elementMethod.MakeGenericInstanceMethod(genArgs);
+            }
+
+            return module.ImportReference(method);
         }
 
         public static SequencePoint GetSequencePoint(this MemberReference memberRef)
@@ -2123,7 +2645,7 @@ namespace Katuusagi.ILPostProcessorCommon.Editor
             return cloned;
         }
 
-        public static OpCode SwitchShortOpCode(OpCode opCode)
+        public static OpCode SwitchToLongJump(OpCode opCode)
         {
             if (opCode == OpCodes.Br_S)
                 return OpCodes.Br;
@@ -2153,990 +2675,10 @@ namespace Katuusagi.ILPostProcessorCommon.Editor
                 return OpCodes.Blt_Un;
             else if (opCode == OpCodes.Leave_S)
                 return OpCodes.Leave;
-            else if (opCode == OpCodes.Br_S)
-                return OpCodes.Br;
-            else if (opCode == OpCodes.Brfalse_S)
-                return OpCodes.Brfalse;
-            else if (opCode == OpCodes.Brtrue_S)
-                return OpCodes.Brtrue;
-            else if (opCode == OpCodes.Beq_S)
-                return OpCodes.Beq;
-            else if (opCode == OpCodes.Bge_S)
-                return OpCodes.Bge;
-            else if (opCode == OpCodes.Bgt_S)
-                return OpCodes.Bgt;
-            else if (opCode == OpCodes.Ble_S)
-                return OpCodes.Ble;
-            else if (opCode == OpCodes.Blt_S)
-                return OpCodes.Blt;
-            else if (opCode == OpCodes.Bne_Un_S)
-                return OpCodes.Bne_Un;
-            else if (opCode == OpCodes.Bge_Un_S)
-                return OpCodes.Bge_Un;
-            else if (opCode == OpCodes.Bgt_Un_S)
-                return OpCodes.Bgt_Un;
-            else if (opCode == OpCodes.Ble_Un_S)
-                return OpCodes.Ble_Un;
-            else if (opCode == OpCodes.Blt_Un_S)
-                return OpCodes.Blt_Un;
-            else if (opCode == OpCodes.Leave_S)
-                return OpCodes.Leave;
-            else if (opCode == OpCodes.Br_S)
-                return OpCodes.Br;
-            else if (opCode == OpCodes.Brfalse_S)
-                return OpCodes.Brfalse;
-            else if (opCode == OpCodes.Brtrue_S)
-                return OpCodes.Brtrue;
-            else if (opCode == OpCodes.Beq_S)
-                return OpCodes.Beq;
-            else if (opCode == OpCodes.Bge_S)
-                return OpCodes.Bge;
-            else if (opCode == OpCodes.Bgt_S)
-                return OpCodes.Bgt;
-            else if (opCode == OpCodes.Ble_S)
-                return OpCodes.Ble;
-            else if (opCode == OpCodes.Blt_S)
-                return OpCodes.Blt;
-            else if (opCode == OpCodes.Bne_Un_S)
-                return OpCodes.Bne_Un;
-            else if (opCode == OpCodes.Bge_Un_S)
-                return OpCodes.Bge_Un;
-            else if (opCode == OpCodes.Bgt_Un_S)
-                return OpCodes.Bgt_Un;
-            else if (opCode == OpCodes.Ble_Un_S)
-                return OpCodes.Ble_Un;
-            else if (opCode == OpCodes.Blt_Un_S)
-                return OpCodes.Blt_Un;
-            else if (opCode == OpCodes.Leave_S)
-                return OpCodes.Leave;
-            else if (opCode == OpCodes.Br_S)
-                return OpCodes.Br;
-            else if (opCode == OpCodes.Brfalse_S)
-                return OpCodes.Brfalse;
-            else if (opCode == OpCodes.Brtrue_S)
-                return OpCodes.Brtrue;
-            else if (opCode == OpCodes.Beq_S)
-                return OpCodes.Beq;
-            else if (opCode == OpCodes.Bge_S)
-                return OpCodes.Bge;
-            else if (opCode == OpCodes.Bgt_S)
-                return OpCodes.Bgt;
-            else if (opCode == OpCodes.Ble_S)
-                return OpCodes.Ble;
-            else if (opCode == OpCodes.Blt_S)
-                return OpCodes.Blt;
-            else if (opCode == OpCodes.Bne_Un_S)
-                return OpCodes.Bne_Un;
-            else if (opCode == OpCodes.Bge_Un_S)
-                return OpCodes.Bge_Un;
-            else if (opCode == OpCodes.Bgt_Un_S)
-                return OpCodes.Bgt_Un;
-            else if (opCode == OpCodes.Ble_Un_S)
-                return OpCodes.Ble_Un;
-            else if (opCode == OpCodes.Blt_Un_S)
-                return OpCodes.Blt_Un;
-            else if (opCode == OpCodes.Leave_S)
-                return OpCodes.Leave;
-            else if (opCode == OpCodes.Br_S)
-                return OpCodes.Br;
-            else if (opCode == OpCodes.Brfalse_S)
-                return OpCodes.Brfalse;
-            else if (opCode == OpCodes.Brtrue_S)
-                return OpCodes.Brtrue;
-            else if (opCode == OpCodes.Beq_S)
-                return OpCodes.Beq;
-            else if (opCode == OpCodes.Bge_S)
-                return OpCodes.Bge;
-            else if (opCode == OpCodes.Bgt_S)
-                return OpCodes.Bgt;
-            else if (opCode == OpCodes.Ble_S)
-                return OpCodes.Ble;
-            else if (opCode == OpCodes.Blt_S)
-                return OpCodes.Blt;
-            else if (opCode == OpCodes.Bne_Un_S)
-                return OpCodes.Bne_Un;
-            else if (opCode == OpCodes.Bge_Un_S)
-                return OpCodes.Bge_Un;
-            else if (opCode == OpCodes.Bgt_Un_S)
-                return OpCodes.Bgt_Un;
-            else if (opCode == OpCodes.Ble_Un_S)
-                return OpCodes.Ble_Un;
-            else if (opCode == OpCodes.Blt_Un_S)
-                return OpCodes.Blt_Un;
-            else if (opCode == OpCodes.Leave_S)
-                return OpCodes.Leave;
-            else if (opCode == OpCodes.Br_S)
-                return OpCodes.Br;
-            else if (opCode == OpCodes.Brfalse_S)
-                return OpCodes.Brfalse;
-            else if (opCode == OpCodes.Brtrue_S)
-                return OpCodes.Brtrue;
-            else if (opCode == OpCodes.Beq_S)
-                return OpCodes.Beq;
-            else if (opCode == OpCodes.Bge_S)
-                return OpCodes.Bge;
-            else if (opCode == OpCodes.Bgt_S)
-                return OpCodes.Bgt;
-            else if (opCode == OpCodes.Ble_S)
-                return OpCodes.Ble;
-            else if (opCode == OpCodes.Blt_S)
-                return OpCodes.Blt;
-            else if (opCode == OpCodes.Bne_Un_S)
-                return OpCodes.Bne_Un;
-            else if (opCode == OpCodes.Bge_Un_S)
-                return OpCodes.Bge_Un;
-            else if (opCode == OpCodes.Bgt_Un_S)
-                return OpCodes.Bgt_Un;
-            else if (opCode == OpCodes.Ble_Un_S)
-                return OpCodes.Ble_Un;
-            else if (opCode == OpCodes.Blt_Un_S)
-                return OpCodes.Blt_Un;
-            else if (opCode == OpCodes.Leave_S)
-                return OpCodes.Leave;
-            else if (opCode == OpCodes.Br_S)
-                return OpCodes.Br;
-            else if (opCode == OpCodes.Brfalse_S)
-                return OpCodes.Brfalse;
-            else if (opCode == OpCodes.Brtrue_S)
-                return OpCodes.Brtrue;
-            else if (opCode == OpCodes.Beq_S)
-                return OpCodes.Beq;
-            else if (opCode == OpCodes.Bge_S)
-                return OpCodes.Bge;
-            else if (opCode == OpCodes.Bgt_S)
-                return OpCodes.Bgt;
-            else if (opCode == OpCodes.Ble_S)
-                return OpCodes.Ble;
-            else if (opCode == OpCodes.Blt_S)
-                return OpCodes.Blt;
-            else if (opCode == OpCodes.Bne_Un_S)
-                return OpCodes.Bne_Un;
-            else if (opCode == OpCodes.Bge_Un_S)
-                return OpCodes.Bge_Un;
-            else if (opCode == OpCodes.Bgt_Un_S)
-                return OpCodes.Bgt_Un;
-            else if (opCode == OpCodes.Ble_Un_S)
-                return OpCodes.Ble_Un;
-            else if (opCode == OpCodes.Blt_Un_S)
-                return OpCodes.Blt_Un;
-            else if (opCode == OpCodes.Leave_S)
-                return OpCodes.Leave;
-            else if (opCode == OpCodes.Br_S)
-                return OpCodes.Br;
-            else if (opCode == OpCodes.Brfalse_S)
-                return OpCodes.Brfalse;
-            else if (opCode == OpCodes.Brtrue_S)
-                return OpCodes.Brtrue;
-            else if (opCode == OpCodes.Beq_S)
-                return OpCodes.Beq;
-            else if (opCode == OpCodes.Bge_S)
-                return OpCodes.Bge;
-            else if (opCode == OpCodes.Bgt_S)
-                return OpCodes.Bgt;
-            else if (opCode == OpCodes.Ble_S)
-                return OpCodes.Ble;
-            else if (opCode == OpCodes.Blt_S)
-                return OpCodes.Blt;
-            else if (opCode == OpCodes.Bne_Un_S)
-                return OpCodes.Bne_Un;
-            else if (opCode == OpCodes.Bge_Un_S)
-                return OpCodes.Bge_Un;
-            else if (opCode == OpCodes.Bgt_Un_S)
-                return OpCodes.Bgt_Un;
-            else if (opCode == OpCodes.Ble_Un_S)
-                return OpCodes.Ble_Un;
-            else if (opCode == OpCodes.Blt_Un_S)
-                return OpCodes.Blt_Un;
-            else if (opCode == OpCodes.Leave_S)
-                return OpCodes.Leave;
-            else if (opCode == OpCodes.Br_S)
-                return OpCodes.Br;
-            else if (opCode == OpCodes.Brfalse_S)
-                return OpCodes.Brfalse;
-            else if (opCode == OpCodes.Brtrue_S)
-                return OpCodes.Brtrue;
-            else if (opCode == OpCodes.Beq_S)
-                return OpCodes.Beq;
-            else if (opCode == OpCodes.Bge_S)
-                return OpCodes.Bge;
-            else if (opCode == OpCodes.Bgt_S)
-                return OpCodes.Bgt;
-            else if (opCode == OpCodes.Ble_S)
-                return OpCodes.Ble;
-            else if (opCode == OpCodes.Blt_S)
-                return OpCodes.Blt;
-            else if (opCode == OpCodes.Bne_Un_S)
-                return OpCodes.Bne_Un;
-            else if (opCode == OpCodes.Bge_Un_S)
-                return OpCodes.Bge_Un;
-            else if (opCode == OpCodes.Bgt_Un_S)
-                return OpCodes.Bgt_Un;
-            else if (opCode == OpCodes.Ble_Un_S)
-                return OpCodes.Ble_Un;
-            else if (opCode == OpCodes.Blt_Un_S)
-                return OpCodes.Blt_Un;
-            else if (opCode == OpCodes.Leave_S)
-                return OpCodes.Leave;
-            else if (opCode == OpCodes.Br_S)
-                return OpCodes.Br;
-            else if (opCode == OpCodes.Brfalse_S)
-                return OpCodes.Brfalse;
-            else if (opCode == OpCodes.Brtrue_S)
-                return OpCodes.Brtrue;
-            else if (opCode == OpCodes.Beq_S)
-                return OpCodes.Beq;
-            else if (opCode == OpCodes.Bge_S)
-                return OpCodes.Bge;
-            else if (opCode == OpCodes.Bgt_S)
-                return OpCodes.Bgt;
-            else if (opCode == OpCodes.Ble_S)
-                return OpCodes.Ble;
-            else if (opCode == OpCodes.Blt_S)
-                return OpCodes.Blt;
-            else if (opCode == OpCodes.Bne_Un_S)
-                return OpCodes.Bne_Un;
-            else if (opCode == OpCodes.Bge_Un_S)
-                return OpCodes.Bge_Un;
-            else if (opCode == OpCodes.Bgt_Un_S)
-                return OpCodes.Bgt_Un;
-            else if (opCode == OpCodes.Ble_Un_S)
-                return OpCodes.Ble_Un;
-            else if (opCode == OpCodes.Blt_Un_S)
-                return OpCodes.Blt_Un;
-            else if (opCode == OpCodes.Leave_S)
-                return OpCodes.Leave;
-            else if (opCode == OpCodes.Br_S)
-                return OpCodes.Br;
-            else if (opCode == OpCodes.Brfalse_S)
-                return OpCodes.Brfalse;
-            else if (opCode == OpCodes.Brtrue_S)
-                return OpCodes.Brtrue;
-            else if (opCode == OpCodes.Beq_S)
-                return OpCodes.Beq;
-            else if (opCode == OpCodes.Bge_S)
-                return OpCodes.Bge;
-            else if (opCode == OpCodes.Bgt_S)
-                return OpCodes.Bgt;
-            else if (opCode == OpCodes.Ble_S)
-                return OpCodes.Ble;
-            else if (opCode == OpCodes.Blt_S)
-                return OpCodes.Blt;
-            else if (opCode == OpCodes.Bne_Un_S)
-                return OpCodes.Bne_Un;
-            else if (opCode == OpCodes.Bge_Un_S)
-                return OpCodes.Bge_Un;
-            else if (opCode == OpCodes.Bgt_Un_S)
-                return OpCodes.Bgt_Un;
-            else if (opCode == OpCodes.Ble_Un_S)
-                return OpCodes.Ble_Un;
-            else if (opCode == OpCodes.Blt_Un_S)
-                return OpCodes.Blt_Un;
-            else if (opCode == OpCodes.Leave_S)
-                return OpCodes.Leave;
-            else if (opCode == OpCodes.Br_S)
-                return OpCodes.Br;
-            else if (opCode == OpCodes.Brfalse_S)
-                return OpCodes.Brfalse;
-            else if (opCode == OpCodes.Brtrue_S)
-                return OpCodes.Brtrue;
-            else if (opCode == OpCodes.Beq_S)
-                return OpCodes.Beq;
-            else if (opCode == OpCodes.Bge_S)
-                return OpCodes.Bge;
-            else if (opCode == OpCodes.Bgt_S)
-                return OpCodes.Bgt;
-            else if (opCode == OpCodes.Ble_S)
-                return OpCodes.Ble;
-            else if (opCode == OpCodes.Blt_S)
-                return OpCodes.Blt;
-            else if (opCode == OpCodes.Bne_Un_S)
-                return OpCodes.Bne_Un;
-            else if (opCode == OpCodes.Bge_Un_S)
-                return OpCodes.Bge_Un;
-            else if (opCode == OpCodes.Bgt_Un_S)
-                return OpCodes.Bgt_Un;
-            else if (opCode == OpCodes.Ble_Un_S)
-                return OpCodes.Ble_Un;
-            else if (opCode == OpCodes.Blt_Un_S)
-                return OpCodes.Blt_Un;
-            else if (opCode == OpCodes.Leave_S)
-                return OpCodes.Leave;
-            else if (opCode == OpCodes.Br_S)
-                return OpCodes.Br;
-            else if (opCode == OpCodes.Brfalse_S)
-                return OpCodes.Brfalse;
-            else if (opCode == OpCodes.Brtrue_S)
-                return OpCodes.Brtrue;
-            else if (opCode == OpCodes.Beq_S)
-                return OpCodes.Beq;
-            else if (opCode == OpCodes.Bge_S)
-                return OpCodes.Bge;
-            else if (opCode == OpCodes.Bgt_S)
-                return OpCodes.Bgt;
-            else if (opCode == OpCodes.Ble_S)
-                return OpCodes.Ble;
-            else if (opCode == OpCodes.Blt_S)
-                return OpCodes.Blt;
-            else if (opCode == OpCodes.Bne_Un_S)
-                return OpCodes.Bne_Un;
-            else if (opCode == OpCodes.Bge_Un_S)
-                return OpCodes.Bge_Un;
-            else if (opCode == OpCodes.Bgt_Un_S)
-                return OpCodes.Bgt_Un;
-            else if (opCode == OpCodes.Ble_Un_S)
-                return OpCodes.Ble_Un;
-            else if (opCode == OpCodes.Blt_Un_S)
-                return OpCodes.Blt_Un;
-            else if (opCode == OpCodes.Leave_S)
-                return OpCodes.Leave;
-            else if (opCode == OpCodes.Br_S)
-                return OpCodes.Br;
-            else if (opCode == OpCodes.Brfalse_S)
-                return OpCodes.Brfalse;
-            else if (opCode == OpCodes.Brtrue_S)
-                return OpCodes.Brtrue;
-            else if (opCode == OpCodes.Beq_S)
-                return OpCodes.Beq;
-            else if (opCode == OpCodes.Bge_S)
-                return OpCodes.Bge;
-            else if (opCode == OpCodes.Bgt_S)
-                return OpCodes.Bgt;
-            else if (opCode == OpCodes.Ble_S)
-                return OpCodes.Ble;
-            else if (opCode == OpCodes.Blt_S)
-                return OpCodes.Blt;
-            else if (opCode == OpCodes.Bne_Un_S)
-                return OpCodes.Bne_Un;
-            else if (opCode == OpCodes.Bge_Un_S)
-                return OpCodes.Bge_Un;
-            else if (opCode == OpCodes.Bgt_Un_S)
-                return OpCodes.Bgt_Un;
-            else if (opCode == OpCodes.Ble_Un_S)
-                return OpCodes.Ble_Un;
-            else if (opCode == OpCodes.Blt_Un_S)
-                return OpCodes.Blt_Un;
-            else if (opCode == OpCodes.Leave_S)
-                return OpCodes.Leave;
-            else if (opCode == OpCodes.Br_S)
-                return OpCodes.Br;
-            else if (opCode == OpCodes.Brfalse_S)
-                return OpCodes.Brfalse;
-            else if (opCode == OpCodes.Brtrue_S)
-                return OpCodes.Brtrue;
-            else if (opCode == OpCodes.Beq_S)
-                return OpCodes.Beq;
-            else if (opCode == OpCodes.Bge_S)
-                return OpCodes.Bge;
-            else if (opCode == OpCodes.Bgt_S)
-                return OpCodes.Bgt;
-            else if (opCode == OpCodes.Ble_S)
-                return OpCodes.Ble;
-            else if (opCode == OpCodes.Blt_S)
-                return OpCodes.Blt;
-            else if (opCode == OpCodes.Bne_Un_S)
-                return OpCodes.Bne_Un;
-            else if (opCode == OpCodes.Bge_Un_S)
-                return OpCodes.Bge_Un;
-            else if (opCode == OpCodes.Bgt_Un_S)
-                return OpCodes.Bgt_Un;
-            else if (opCode == OpCodes.Ble_Un_S)
-                return OpCodes.Ble_Un;
-            else if (opCode == OpCodes.Blt_Un_S)
-                return OpCodes.Blt_Un;
-            else if (opCode == OpCodes.Leave_S)
-                return OpCodes.Leave;
-            else if (opCode == OpCodes.Br_S)
-                return OpCodes.Br;
-            else if (opCode == OpCodes.Brfalse_S)
-                return OpCodes.Brfalse;
-            else if (opCode == OpCodes.Brtrue_S)
-                return OpCodes.Brtrue;
-            else if (opCode == OpCodes.Beq_S)
-                return OpCodes.Beq;
-            else if (opCode == OpCodes.Bge_S)
-                return OpCodes.Bge;
-            else if (opCode == OpCodes.Bgt_S)
-                return OpCodes.Bgt;
-            else if (opCode == OpCodes.Ble_S)
-                return OpCodes.Ble;
-            else if (opCode == OpCodes.Blt_S)
-                return OpCodes.Blt;
-            else if (opCode == OpCodes.Bne_Un_S)
-                return OpCodes.Bne_Un;
-            else if (opCode == OpCodes.Bge_Un_S)
-                return OpCodes.Bge_Un;
-            else if (opCode == OpCodes.Bgt_Un_S)
-                return OpCodes.Bgt_Un;
-            else if (opCode == OpCodes.Ble_Un_S)
-                return OpCodes.Ble_Un;
-            else if (opCode == OpCodes.Blt_Un_S)
-                return OpCodes.Blt_Un;
-            else if (opCode == OpCodes.Leave_S)
-                return OpCodes.Leave;
-            else if (opCode == OpCodes.Br_S)
-                return OpCodes.Br;
-            else if (opCode == OpCodes.Brfalse_S)
-                return OpCodes.Brfalse;
-            else if (opCode == OpCodes.Brtrue_S)
-                return OpCodes.Brtrue;
-            else if (opCode == OpCodes.Beq_S)
-                return OpCodes.Beq;
-            else if (opCode == OpCodes.Bge_S)
-                return OpCodes.Bge;
-            else if (opCode == OpCodes.Bgt_S)
-                return OpCodes.Bgt;
-            else if (opCode == OpCodes.Ble_S)
-                return OpCodes.Ble;
-            else if (opCode == OpCodes.Blt_S)
-                return OpCodes.Blt;
-            else if (opCode == OpCodes.Bne_Un_S)
-                return OpCodes.Bne_Un;
-            else if (opCode == OpCodes.Bge_Un_S)
-                return OpCodes.Bge_Un;
-            else if (opCode == OpCodes.Bgt_Un_S)
-                return OpCodes.Bgt_Un;
-            else if (opCode == OpCodes.Ble_Un_S)
-                return OpCodes.Ble_Un;
-            else if (opCode == OpCodes.Blt_Un_S)
-                return OpCodes.Blt_Un;
-            else if (opCode == OpCodes.Leave_S)
-                return OpCodes.Leave;
-            else if (opCode == OpCodes.Br_S)
-                return OpCodes.Br;
-            else if (opCode == OpCodes.Brfalse_S)
-                return OpCodes.Brfalse;
-            else if (opCode == OpCodes.Brtrue_S)
-                return OpCodes.Brtrue;
-            else if (opCode == OpCodes.Beq_S)
-                return OpCodes.Beq;
-            else if (opCode == OpCodes.Bge_S)
-                return OpCodes.Bge;
-            else if (opCode == OpCodes.Bgt_S)
-                return OpCodes.Bgt;
-            else if (opCode == OpCodes.Ble_S)
-                return OpCodes.Ble;
-            else if (opCode == OpCodes.Blt_S)
-                return OpCodes.Blt;
-            else if (opCode == OpCodes.Bne_Un_S)
-                return OpCodes.Bne_Un;
-            else if (opCode == OpCodes.Bge_Un_S)
-                return OpCodes.Bge_Un;
-            else if (opCode == OpCodes.Bgt_Un_S)
-                return OpCodes.Bgt_Un;
-            else if (opCode == OpCodes.Ble_Un_S)
-                return OpCodes.Ble_Un;
-            else if (opCode == OpCodes.Blt_Un_S)
-                return OpCodes.Blt_Un;
-            else if (opCode == OpCodes.Leave_S)
-                return OpCodes.Leave;
-            else if (opCode == OpCodes.Br_S)
-                return OpCodes.Br;
-            else if (opCode == OpCodes.Brfalse_S)
-                return OpCodes.Brfalse;
-            else if (opCode == OpCodes.Brtrue_S)
-                return OpCodes.Brtrue;
-            else if (opCode == OpCodes.Beq_S)
-                return OpCodes.Beq;
-            else if (opCode == OpCodes.Bge_S)
-                return OpCodes.Bge;
-            else if (opCode == OpCodes.Bgt_S)
-                return OpCodes.Bgt;
-            else if (opCode == OpCodes.Ble_S)
-                return OpCodes.Ble;
-            else if (opCode == OpCodes.Blt_S)
-                return OpCodes.Blt;
-            else if (opCode == OpCodes.Bne_Un_S)
-                return OpCodes.Bne_Un;
-            else if (opCode == OpCodes.Bge_Un_S)
-                return OpCodes.Bge_Un;
-            else if (opCode == OpCodes.Bgt_Un_S)
-                return OpCodes.Bgt_Un;
-            else if (opCode == OpCodes.Ble_Un_S)
-                return OpCodes.Ble_Un;
-            else if (opCode == OpCodes.Blt_Un_S)
-                return OpCodes.Blt_Un;
-            else if (opCode == OpCodes.Leave_S)
-                return OpCodes.Leave;
-            else if (opCode == OpCodes.Br_S)
-                return OpCodes.Br;
-            else if (opCode == OpCodes.Brfalse_S)
-                return OpCodes.Brfalse;
-            else if (opCode == OpCodes.Brtrue_S)
-                return OpCodes.Brtrue;
-            else if (opCode == OpCodes.Beq_S)
-                return OpCodes.Beq;
-            else if (opCode == OpCodes.Bge_S)
-                return OpCodes.Bge;
-            else if (opCode == OpCodes.Bgt_S)
-                return OpCodes.Bgt;
-            else if (opCode == OpCodes.Ble_S)
-                return OpCodes.Ble;
-            else if (opCode == OpCodes.Blt_S)
-                return OpCodes.Blt;
-            else if (opCode == OpCodes.Bne_Un_S)
-                return OpCodes.Bne_Un;
-            else if (opCode == OpCodes.Bge_Un_S)
-                return OpCodes.Bge_Un;
-            else if (opCode == OpCodes.Bgt_Un_S)
-                return OpCodes.Bgt_Un;
-            else if (opCode == OpCodes.Ble_Un_S)
-                return OpCodes.Ble_Un;
-            else if (opCode == OpCodes.Blt_Un_S)
-                return OpCodes.Blt_Un;
-            else if (opCode == OpCodes.Leave_S)
-                return OpCodes.Leave;
-            else if (opCode == OpCodes.Br_S)
-                return OpCodes.Br;
-            else if (opCode == OpCodes.Brfalse_S)
-                return OpCodes.Brfalse;
-            else if (opCode == OpCodes.Brtrue_S)
-                return OpCodes.Brtrue;
-            else if (opCode == OpCodes.Beq_S)
-                return OpCodes.Beq;
-            else if (opCode == OpCodes.Bge_S)
-                return OpCodes.Bge;
-            else if (opCode == OpCodes.Bgt_S)
-                return OpCodes.Bgt;
-            else if (opCode == OpCodes.Ble_S)
-                return OpCodes.Ble;
-            else if (opCode == OpCodes.Blt_S)
-                return OpCodes.Blt;
-            else if (opCode == OpCodes.Bne_Un_S)
-                return OpCodes.Bne_Un;
-            else if (opCode == OpCodes.Bge_Un_S)
-                return OpCodes.Bge_Un;
-            else if (opCode == OpCodes.Bgt_Un_S)
-                return OpCodes.Bgt_Un;
-            else if (opCode == OpCodes.Ble_Un_S)
-                return OpCodes.Ble_Un;
-            else if (opCode == OpCodes.Blt_Un_S)
-                return OpCodes.Blt_Un;
-            else if (opCode == OpCodes.Leave_S)
-                return OpCodes.Leave;
-            else if (opCode == OpCodes.Br_S)
-                return OpCodes.Br;
-            else if (opCode == OpCodes.Brfalse_S)
-                return OpCodes.Brfalse;
-            else if (opCode == OpCodes.Brtrue_S)
-                return OpCodes.Brtrue;
-            else if (opCode == OpCodes.Beq_S)
-                return OpCodes.Beq;
-            else if (opCode == OpCodes.Bge_S)
-                return OpCodes.Bge;
-            else if (opCode == OpCodes.Bgt_S)
-                return OpCodes.Bgt;
-            else if (opCode == OpCodes.Ble_S)
-                return OpCodes.Ble;
-            else if (opCode == OpCodes.Blt_S)
-                return OpCodes.Blt;
-            else if (opCode == OpCodes.Bne_Un_S)
-                return OpCodes.Bne_Un;
-            else if (opCode == OpCodes.Bge_Un_S)
-                return OpCodes.Bge_Un;
-            else if (opCode == OpCodes.Bgt_Un_S)
-                return OpCodes.Bgt_Un;
-            else if (opCode == OpCodes.Ble_Un_S)
-                return OpCodes.Ble_Un;
-            else if (opCode == OpCodes.Blt_Un_S)
-                return OpCodes.Blt_Un;
-            else if (opCode == OpCodes.Leave_S)
-                return OpCodes.Leave;
-            else if (opCode == OpCodes.Br_S)
-                return OpCodes.Br;
-            else if (opCode == OpCodes.Brfalse_S)
-                return OpCodes.Brfalse;
-            else if (opCode == OpCodes.Brtrue_S)
-                return OpCodes.Brtrue;
-            else if (opCode == OpCodes.Beq_S)
-                return OpCodes.Beq;
-            else if (opCode == OpCodes.Bge_S)
-                return OpCodes.Bge;
-            else if (opCode == OpCodes.Bgt_S)
-                return OpCodes.Bgt;
-            else if (opCode == OpCodes.Ble_S)
-                return OpCodes.Ble;
-            else if (opCode == OpCodes.Blt_S)
-                return OpCodes.Blt;
-            else if (opCode == OpCodes.Bne_Un_S)
-                return OpCodes.Bne_Un;
-            else if (opCode == OpCodes.Bge_Un_S)
-                return OpCodes.Bge_Un;
-            else if (opCode == OpCodes.Bgt_Un_S)
-                return OpCodes.Bgt_Un;
-            else if (opCode == OpCodes.Ble_Un_S)
-                return OpCodes.Ble_Un;
-            else if (opCode == OpCodes.Blt_Un_S)
-                return OpCodes.Blt_Un;
-            else if (opCode == OpCodes.Leave_S)
-                return OpCodes.Leave;
-            else if (opCode == OpCodes.Br_S)
-                return OpCodes.Br;
-            else if (opCode == OpCodes.Brfalse_S)
-                return OpCodes.Brfalse;
-            else if (opCode == OpCodes.Brtrue_S)
-                return OpCodes.Brtrue;
-            else if (opCode == OpCodes.Beq_S)
-                return OpCodes.Beq;
-            else if (opCode == OpCodes.Bge_S)
-                return OpCodes.Bge;
-            else if (opCode == OpCodes.Bgt_S)
-                return OpCodes.Bgt;
-            else if (opCode == OpCodes.Ble_S)
-                return OpCodes.Ble;
-            else if (opCode == OpCodes.Blt_S)
-                return OpCodes.Blt;
-            else if (opCode == OpCodes.Bne_Un_S)
-                return OpCodes.Bne_Un;
-            else if (opCode == OpCodes.Bge_Un_S)
-                return OpCodes.Bge_Un;
-            else if (opCode == OpCodes.Bgt_Un_S)
-                return OpCodes.Bgt_Un;
-            else if (opCode == OpCodes.Ble_Un_S)
-                return OpCodes.Ble_Un;
-            else if (opCode == OpCodes.Blt_Un_S)
-                return OpCodes.Blt_Un;
-            else if (opCode == OpCodes.Leave_S)
-                return OpCodes.Leave;
-            else if (opCode == OpCodes.Br_S)
-                return OpCodes.Br;
-            else if (opCode == OpCodes.Brfalse_S)
-                return OpCodes.Brfalse;
-            else if (opCode == OpCodes.Brtrue_S)
-                return OpCodes.Brtrue;
-            else if (opCode == OpCodes.Beq_S)
-                return OpCodes.Beq;
-            else if (opCode == OpCodes.Bge_S)
-                return OpCodes.Bge;
-            else if (opCode == OpCodes.Bgt_S)
-                return OpCodes.Bgt;
-            else if (opCode == OpCodes.Ble_S)
-                return OpCodes.Ble;
-            else if (opCode == OpCodes.Blt_S)
-                return OpCodes.Blt;
-            else if (opCode == OpCodes.Bne_Un_S)
-                return OpCodes.Bne_Un;
-            else if (opCode == OpCodes.Bge_Un_S)
-                return OpCodes.Bge_Un;
-            else if (opCode == OpCodes.Bgt_Un_S)
-                return OpCodes.Bgt_Un;
-            else if (opCode == OpCodes.Ble_Un_S)
-                return OpCodes.Ble_Un;
-            else if (opCode == OpCodes.Blt_Un_S)
-                return OpCodes.Blt_Un;
-            else if (opCode == OpCodes.Leave_S)
-                return OpCodes.Leave;
-            else if (opCode == OpCodes.Br_S)
-                return OpCodes.Br;
-            else if (opCode == OpCodes.Brfalse_S)
-                return OpCodes.Brfalse;
-            else if (opCode == OpCodes.Brtrue_S)
-                return OpCodes.Brtrue;
-            else if (opCode == OpCodes.Beq_S)
-                return OpCodes.Beq;
-            else if (opCode == OpCodes.Bge_S)
-                return OpCodes.Bge;
-            else if (opCode == OpCodes.Bgt_S)
-                return OpCodes.Bgt;
-            else if (opCode == OpCodes.Ble_S)
-                return OpCodes.Ble;
-            else if (opCode == OpCodes.Blt_S)
-                return OpCodes.Blt;
-            else if (opCode == OpCodes.Bne_Un_S)
-                return OpCodes.Bne_Un;
-            else if (opCode == OpCodes.Bge_Un_S)
-                return OpCodes.Bge_Un;
-            else if (opCode == OpCodes.Bgt_Un_S)
-                return OpCodes.Bgt_Un;
-            else if (opCode == OpCodes.Ble_Un_S)
-                return OpCodes.Ble_Un;
-            else if (opCode == OpCodes.Blt_Un_S)
-                return OpCodes.Blt_Un;
-            else if (opCode == OpCodes.Leave_S)
-                return OpCodes.Leave;
-            else if (opCode == OpCodes.Br_S)
-                return OpCodes.Br;
-            else if (opCode == OpCodes.Brfalse_S)
-                return OpCodes.Brfalse;
-            else if (opCode == OpCodes.Brtrue_S)
-                return OpCodes.Brtrue;
-            else if (opCode == OpCodes.Beq_S)
-                return OpCodes.Beq;
-            else if (opCode == OpCodes.Bge_S)
-                return OpCodes.Bge;
-            else if (opCode == OpCodes.Bgt_S)
-                return OpCodes.Bgt;
-            else if (opCode == OpCodes.Ble_S)
-                return OpCodes.Ble;
-            else if (opCode == OpCodes.Blt_S)
-                return OpCodes.Blt;
-            else if (opCode == OpCodes.Bne_Un_S)
-                return OpCodes.Bne_Un;
-            else if (opCode == OpCodes.Bge_Un_S)
-                return OpCodes.Bge_Un;
-            else if (opCode == OpCodes.Bgt_Un_S)
-                return OpCodes.Bgt_Un;
-            else if (opCode == OpCodes.Ble_Un_S)
-                return OpCodes.Ble_Un;
-            else if (opCode == OpCodes.Blt_Un_S)
-                return OpCodes.Blt_Un;
-            else if (opCode == OpCodes.Leave_S)
-                return OpCodes.Leave;
-            else if (opCode == OpCodes.Br_S)
-                return OpCodes.Br;
-            else if (opCode == OpCodes.Brfalse_S)
-                return OpCodes.Brfalse;
-            else if (opCode == OpCodes.Brtrue_S)
-                return OpCodes.Brtrue;
-            else if (opCode == OpCodes.Beq_S)
-                return OpCodes.Beq;
-            else if (opCode == OpCodes.Bge_S)
-                return OpCodes.Bge;
-            else if (opCode == OpCodes.Bgt_S)
-                return OpCodes.Bgt;
-            else if (opCode == OpCodes.Ble_S)
-                return OpCodes.Ble;
-            else if (opCode == OpCodes.Blt_S)
-                return OpCodes.Blt;
-            else if (opCode == OpCodes.Bne_Un_S)
-                return OpCodes.Bne_Un;
-            else if (opCode == OpCodes.Bge_Un_S)
-                return OpCodes.Bge_Un;
-            else if (opCode == OpCodes.Bgt_Un_S)
-                return OpCodes.Bgt_Un;
-            else if (opCode == OpCodes.Ble_Un_S)
-                return OpCodes.Ble_Un;
-            else if (opCode == OpCodes.Blt_Un_S)
-                return OpCodes.Blt_Un;
-            else if (opCode == OpCodes.Leave_S)
-                return OpCodes.Leave;
-            else if (opCode == OpCodes.Br_S)
-                return OpCodes.Br;
-            else if (opCode == OpCodes.Brfalse_S)
-                return OpCodes.Brfalse;
-            else if (opCode == OpCodes.Brtrue_S)
-                return OpCodes.Brtrue;
-            else if (opCode == OpCodes.Beq_S)
-                return OpCodes.Beq;
-            else if (opCode == OpCodes.Bge_S)
-                return OpCodes.Bge;
-            else if (opCode == OpCodes.Bgt_S)
-                return OpCodes.Bgt;
-            else if (opCode == OpCodes.Ble_S)
-                return OpCodes.Ble;
-            else if (opCode == OpCodes.Blt_S)
-                return OpCodes.Blt;
-            else if (opCode == OpCodes.Bne_Un_S)
-                return OpCodes.Bne_Un;
-            else if (opCode == OpCodes.Bge_Un_S)
-                return OpCodes.Bge_Un;
-            else if (opCode == OpCodes.Bgt_Un_S)
-                return OpCodes.Bgt_Un;
-            else if (opCode == OpCodes.Ble_Un_S)
-                return OpCodes.Ble_Un;
-            else if (opCode == OpCodes.Blt_Un_S)
-                return OpCodes.Blt_Un;
-            else if (opCode == OpCodes.Leave_S)
-                return OpCodes.Leave;
-            else if (opCode == OpCodes.Br_S)
-                return OpCodes.Br;
-            else if (opCode == OpCodes.Brfalse_S)
-                return OpCodes.Brfalse;
-            else if (opCode == OpCodes.Brtrue_S)
-                return OpCodes.Brtrue;
-            else if (opCode == OpCodes.Beq_S)
-                return OpCodes.Beq;
-            else if (opCode == OpCodes.Bge_S)
-                return OpCodes.Bge;
-            else if (opCode == OpCodes.Bgt_S)
-                return OpCodes.Bgt;
-            else if (opCode == OpCodes.Ble_S)
-                return OpCodes.Ble;
-            else if (opCode == OpCodes.Blt_S)
-                return OpCodes.Blt;
-            else if (opCode == OpCodes.Bne_Un_S)
-                return OpCodes.Bne_Un;
-            else if (opCode == OpCodes.Bge_Un_S)
-                return OpCodes.Bge_Un;
-            else if (opCode == OpCodes.Bgt_Un_S)
-                return OpCodes.Bgt_Un;
-            else if (opCode == OpCodes.Ble_Un_S)
-                return OpCodes.Ble_Un;
-            else if (opCode == OpCodes.Blt_Un_S)
-                return OpCodes.Blt_Un;
-            else if (opCode == OpCodes.Leave_S)
-                return OpCodes.Leave;
-            else if (opCode == OpCodes.Br_S)
-                return OpCodes.Br;
-            else if (opCode == OpCodes.Brfalse_S)
-                return OpCodes.Brfalse;
-            else if (opCode == OpCodes.Brtrue_S)
-                return OpCodes.Brtrue;
-            else if (opCode == OpCodes.Beq_S)
-                return OpCodes.Beq;
-            else if (opCode == OpCodes.Bge_S)
-                return OpCodes.Bge;
-            else if (opCode == OpCodes.Bgt_S)
-                return OpCodes.Bgt;
-            else if (opCode == OpCodes.Ble_S)
-                return OpCodes.Ble;
-            else if (opCode == OpCodes.Blt_S)
-                return OpCodes.Blt;
-            else if (opCode == OpCodes.Bne_Un_S)
-                return OpCodes.Bne_Un;
-            else if (opCode == OpCodes.Bge_Un_S)
-                return OpCodes.Bge_Un;
-            else if (opCode == OpCodes.Bgt_Un_S)
-                return OpCodes.Bgt_Un;
-            else if (opCode == OpCodes.Ble_Un_S)
-                return OpCodes.Ble_Un;
-            else if (opCode == OpCodes.Blt_Un_S)
-                return OpCodes.Blt_Un;
-            else if (opCode == OpCodes.Leave_S)
-                return OpCodes.Leave;
-            else if (opCode == OpCodes.Br_S)
-                return OpCodes.Br;
-            else if (opCode == OpCodes.Brfalse_S)
-                return OpCodes.Brfalse;
-            else if (opCode == OpCodes.Brtrue_S)
-                return OpCodes.Brtrue;
-            else if (opCode == OpCodes.Beq_S)
-                return OpCodes.Beq;
-            else if (opCode == OpCodes.Bge_S)
-                return OpCodes.Bge;
-            else if (opCode == OpCodes.Bgt_S)
-                return OpCodes.Bgt;
-            else if (opCode == OpCodes.Ble_S)
-                return OpCodes.Ble;
-            else if (opCode == OpCodes.Blt_S)
-                return OpCodes.Blt;
-            else if (opCode == OpCodes.Bne_Un_S)
-                return OpCodes.Bne_Un;
-            else if (opCode == OpCodes.Bge_Un_S)
-                return OpCodes.Bge_Un;
-            else if (opCode == OpCodes.Bgt_Un_S)
-                return OpCodes.Bgt_Un;
-            else if (opCode == OpCodes.Ble_Un_S)
-                return OpCodes.Ble_Un;
-            else if (opCode == OpCodes.Blt_Un_S)
-                return OpCodes.Blt_Un;
-            else if (opCode == OpCodes.Leave_S)
-                return OpCodes.Leave;
-            else if (opCode == OpCodes.Br_S)
-                return OpCodes.Br;
-            else if (opCode == OpCodes.Brfalse_S)
-                return OpCodes.Brfalse;
-            else if (opCode == OpCodes.Brtrue_S)
-                return OpCodes.Brtrue;
-            else if (opCode == OpCodes.Beq_S)
-                return OpCodes.Beq;
-            else if (opCode == OpCodes.Bge_S)
-                return OpCodes.Bge;
-            else if (opCode == OpCodes.Bgt_S)
-                return OpCodes.Bgt;
-            else if (opCode == OpCodes.Ble_S)
-                return OpCodes.Ble;
-            else if (opCode == OpCodes.Blt_S)
-                return OpCodes.Blt;
-            else if (opCode == OpCodes.Bne_Un_S)
-                return OpCodes.Bne_Un;
-            else if (opCode == OpCodes.Bge_Un_S)
-                return OpCodes.Bge_Un;
-            else if (opCode == OpCodes.Bgt_Un_S)
-                return OpCodes.Bgt_Un;
-            else if (opCode == OpCodes.Ble_Un_S)
-                return OpCodes.Ble_Un;
-            else if (opCode == OpCodes.Blt_Un_S)
-                return OpCodes.Blt_Un;
-            else if (opCode == OpCodes.Leave_S)
-                return OpCodes.Leave;
-            else if (opCode == OpCodes.Br_S)
-                return OpCodes.Br;
-            else if (opCode == OpCodes.Brfalse_S)
-                return OpCodes.Brfalse;
-            else if (opCode == OpCodes.Brtrue_S)
-                return OpCodes.Brtrue;
-            else if (opCode == OpCodes.Beq_S)
-                return OpCodes.Beq;
-            else if (opCode == OpCodes.Bge_S)
-                return OpCodes.Bge;
-            else if (opCode == OpCodes.Bgt_S)
-                return OpCodes.Bgt;
-            else if (opCode == OpCodes.Ble_S)
-                return OpCodes.Ble;
-            else if (opCode == OpCodes.Blt_S)
-                return OpCodes.Blt;
-            else if (opCode == OpCodes.Bne_Un_S)
-                return OpCodes.Bne_Un;
-            else if (opCode == OpCodes.Bge_Un_S)
-                return OpCodes.Bge_Un;
-            else if (opCode == OpCodes.Bgt_Un_S)
-                return OpCodes.Bgt_Un;
-            else if (opCode == OpCodes.Ble_Un_S)
-                return OpCodes.Ble_Un;
-            else if (opCode == OpCodes.Blt_Un_S)
-                return OpCodes.Blt_Un;
-            else if (opCode == OpCodes.Leave_S)
-                return OpCodes.Leave;
-            else if (opCode == OpCodes.Br_S)
-                return OpCodes.Br;
-            else if (opCode == OpCodes.Brfalse_S)
-                return OpCodes.Brfalse;
-            else if (opCode == OpCodes.Brtrue_S)
-                return OpCodes.Brtrue;
-            else if (opCode == OpCodes.Beq_S)
-                return OpCodes.Beq;
-            else if (opCode == OpCodes.Bge_S)
-                return OpCodes.Bge;
-            else if (opCode == OpCodes.Bgt_S)
-                return OpCodes.Bgt;
-            else if (opCode == OpCodes.Ble_S)
-                return OpCodes.Ble;
-            else if (opCode == OpCodes.Blt_S)
-                return OpCodes.Blt;
-            else if (opCode == OpCodes.Bne_Un_S)
-                return OpCodes.Bne_Un;
-            else if (opCode == OpCodes.Bge_Un_S)
-                return OpCodes.Bge_Un;
-            else if (opCode == OpCodes.Bgt_Un_S)
-                return OpCodes.Bgt_Un;
-            else if (opCode == OpCodes.Ble_Un_S)
-                return OpCodes.Ble_Un;
-            else if (opCode == OpCodes.Blt_Un_S)
-                return OpCodes.Blt_Un;
-            else if (opCode == OpCodes.Leave_S)
-                return OpCodes.Leave;
-            else if (opCode == OpCodes.Br_S)
-                return OpCodes.Br;
-            else if (opCode == OpCodes.Brfalse_S)
-                return OpCodes.Brfalse;
-            else if (opCode == OpCodes.Brtrue_S)
-                return OpCodes.Brtrue;
-            else if (opCode == OpCodes.Beq_S)
-                return OpCodes.Beq;
-            else if (opCode == OpCodes.Bge_S)
-                return OpCodes.Bge;
-            else if (opCode == OpCodes.Bgt_S)
-                return OpCodes.Bgt;
-            else if (opCode == OpCodes.Ble_S)
-                return OpCodes.Ble;
-            else if (opCode == OpCodes.Blt_S)
-                return OpCodes.Blt;
-            else if (opCode == OpCodes.Bne_Un_S)
-                return OpCodes.Bne_Un;
-            else if (opCode == OpCodes.Bge_Un_S)
-                return OpCodes.Bge_Un;
-            else if (opCode == OpCodes.Bgt_Un_S)
-                return OpCodes.Bgt_Un;
-            else if (opCode == OpCodes.Ble_Un_S)
-                return OpCodes.Ble_Un;
-            else if (opCode == OpCodes.Blt_Un_S)
-                return OpCodes.Blt_Un;
-            else if (opCode == OpCodes.Leave_S)
-                return OpCodes.Leave;
             return opCode;
         }
 
-        public static OpCode SwitchLongOpCode(OpCode opCode)
+        public static OpCode SwitchToShortJump(OpCode opCode)
         {
             if (opCode == OpCodes.Br)
                 return OpCodes.Br_S;
@@ -3166,987 +2708,231 @@ namespace Katuusagi.ILPostProcessorCommon.Editor
                 return OpCodes.Blt_Un_S;
             else if (opCode == OpCodes.Leave)
                 return OpCodes.Leave_S;
-            else if (opCode == OpCodes.Br)
-                return OpCodes.Br_S;
-            else if (opCode == OpCodes.Brfalse)
-                return OpCodes.Brfalse_S;
-            else if (opCode == OpCodes.Brtrue)
-                return OpCodes.Brtrue_S;
-            else if (opCode == OpCodes.Beq)
-                return OpCodes.Beq_S;
-            else if (opCode == OpCodes.Bge)
-                return OpCodes.Bge_S;
-            else if (opCode == OpCodes.Bgt)
-                return OpCodes.Bgt_S;
-            else if (opCode == OpCodes.Ble)
-                return OpCodes.Ble_S;
-            else if (opCode == OpCodes.Blt)
-                return OpCodes.Blt_S;
-            else if (opCode == OpCodes.Bne_Un)
-                return OpCodes.Bne_Un_S;
-            else if (opCode == OpCodes.Bge_Un)
-                return OpCodes.Bge_Un_S;
-            else if (opCode == OpCodes.Bgt_Un)
-                return OpCodes.Bgt_Un_S;
-            else if (opCode == OpCodes.Ble_Un)
-                return OpCodes.Ble_Un_S;
-            else if (opCode == OpCodes.Blt_Un)
-                return OpCodes.Blt_Un_S;
-            else if (opCode == OpCodes.Leave)
-                return OpCodes.Leave_S;
-            else if (opCode == OpCodes.Br)
-                return OpCodes.Br_S;
-            else if (opCode == OpCodes.Brfalse)
-                return OpCodes.Brfalse_S;
-            else if (opCode == OpCodes.Brtrue)
-                return OpCodes.Brtrue_S;
-            else if (opCode == OpCodes.Beq)
-                return OpCodes.Beq_S;
-            else if (opCode == OpCodes.Bge)
-                return OpCodes.Bge_S;
-            else if (opCode == OpCodes.Bgt)
-                return OpCodes.Bgt_S;
-            else if (opCode == OpCodes.Ble)
-                return OpCodes.Ble_S;
-            else if (opCode == OpCodes.Blt)
-                return OpCodes.Blt_S;
-            else if (opCode == OpCodes.Bne_Un)
-                return OpCodes.Bne_Un_S;
-            else if (opCode == OpCodes.Bge_Un)
-                return OpCodes.Bge_Un_S;
-            else if (opCode == OpCodes.Bgt_Un)
-                return OpCodes.Bgt_Un_S;
-            else if (opCode == OpCodes.Ble_Un)
-                return OpCodes.Ble_Un_S;
-            else if (opCode == OpCodes.Blt_Un)
-                return OpCodes.Blt_Un_S;
-            else if (opCode == OpCodes.Leave)
-                return OpCodes.Leave_S;
-            else if (opCode == OpCodes.Br)
-                return OpCodes.Br_S;
-            else if (opCode == OpCodes.Brfalse)
-                return OpCodes.Brfalse_S;
-            else if (opCode == OpCodes.Brtrue)
-                return OpCodes.Brtrue_S;
-            else if (opCode == OpCodes.Beq)
-                return OpCodes.Beq_S;
-            else if (opCode == OpCodes.Bge)
-                return OpCodes.Bge_S;
-            else if (opCode == OpCodes.Bgt)
-                return OpCodes.Bgt_S;
-            else if (opCode == OpCodes.Ble)
-                return OpCodes.Ble_S;
-            else if (opCode == OpCodes.Blt)
-                return OpCodes.Blt_S;
-            else if (opCode == OpCodes.Bne_Un)
-                return OpCodes.Bne_Un_S;
-            else if (opCode == OpCodes.Bge_Un)
-                return OpCodes.Bge_Un_S;
-            else if (opCode == OpCodes.Bgt_Un)
-                return OpCodes.Bgt_Un_S;
-            else if (opCode == OpCodes.Ble_Un)
-                return OpCodes.Ble_Un_S;
-            else if (opCode == OpCodes.Blt_Un)
-                return OpCodes.Blt_Un_S;
-            else if (opCode == OpCodes.Leave)
-                return OpCodes.Leave_S;
-            else if (opCode == OpCodes.Br)
-                return OpCodes.Br_S;
-            else if (opCode == OpCodes.Brfalse)
-                return OpCodes.Brfalse_S;
-            else if (opCode == OpCodes.Brtrue)
-                return OpCodes.Brtrue_S;
-            else if (opCode == OpCodes.Beq)
-                return OpCodes.Beq_S;
-            else if (opCode == OpCodes.Bge)
-                return OpCodes.Bge_S;
-            else if (opCode == OpCodes.Bgt)
-                return OpCodes.Bgt_S;
-            else if (opCode == OpCodes.Ble)
-                return OpCodes.Ble_S;
-            else if (opCode == OpCodes.Blt)
-                return OpCodes.Blt_S;
-            else if (opCode == OpCodes.Bne_Un)
-                return OpCodes.Bne_Un_S;
-            else if (opCode == OpCodes.Bge_Un)
-                return OpCodes.Bge_Un_S;
-            else if (opCode == OpCodes.Bgt_Un)
-                return OpCodes.Bgt_Un_S;
-            else if (opCode == OpCodes.Ble_Un)
-                return OpCodes.Ble_Un_S;
-            else if (opCode == OpCodes.Blt_Un)
-                return OpCodes.Blt_Un_S;
-            else if (opCode == OpCodes.Leave)
-                return OpCodes.Leave_S;
-            else if (opCode == OpCodes.Br)
-                return OpCodes.Br_S;
-            else if (opCode == OpCodes.Brfalse)
-                return OpCodes.Brfalse_S;
-            else if (opCode == OpCodes.Brtrue)
-                return OpCodes.Brtrue_S;
-            else if (opCode == OpCodes.Beq)
-                return OpCodes.Beq_S;
-            else if (opCode == OpCodes.Bge)
-                return OpCodes.Bge_S;
-            else if (opCode == OpCodes.Bgt)
-                return OpCodes.Bgt_S;
-            else if (opCode == OpCodes.Ble)
-                return OpCodes.Ble_S;
-            else if (opCode == OpCodes.Blt)
-                return OpCodes.Blt_S;
-            else if (opCode == OpCodes.Bne_Un)
-                return OpCodes.Bne_Un_S;
-            else if (opCode == OpCodes.Bge_Un)
-                return OpCodes.Bge_Un_S;
-            else if (opCode == OpCodes.Bgt_Un)
-                return OpCodes.Bgt_Un_S;
-            else if (opCode == OpCodes.Ble_Un)
-                return OpCodes.Ble_Un_S;
-            else if (opCode == OpCodes.Blt_Un)
-                return OpCodes.Blt_Un_S;
-            else if (opCode == OpCodes.Leave)
-                return OpCodes.Leave_S;
-            else if (opCode == OpCodes.Br)
-                return OpCodes.Br_S;
-            else if (opCode == OpCodes.Brfalse)
-                return OpCodes.Brfalse_S;
-            else if (opCode == OpCodes.Brtrue)
-                return OpCodes.Brtrue_S;
-            else if (opCode == OpCodes.Beq)
-                return OpCodes.Beq_S;
-            else if (opCode == OpCodes.Bge)
-                return OpCodes.Bge_S;
-            else if (opCode == OpCodes.Bgt)
-                return OpCodes.Bgt_S;
-            else if (opCode == OpCodes.Ble)
-                return OpCodes.Ble_S;
-            else if (opCode == OpCodes.Blt)
-                return OpCodes.Blt_S;
-            else if (opCode == OpCodes.Bne_Un)
-                return OpCodes.Bne_Un_S;
-            else if (opCode == OpCodes.Bge_Un)
-                return OpCodes.Bge_Un_S;
-            else if (opCode == OpCodes.Bgt_Un)
-                return OpCodes.Bgt_Un_S;
-            else if (opCode == OpCodes.Ble_Un)
-                return OpCodes.Ble_Un_S;
-            else if (opCode == OpCodes.Blt_Un)
-                return OpCodes.Blt_Un_S;
-            else if (opCode == OpCodes.Leave)
-                return OpCodes.Leave_S;
-            else if (opCode == OpCodes.Br)
-                return OpCodes.Br_S;
-            else if (opCode == OpCodes.Brfalse)
-                return OpCodes.Brfalse_S;
-            else if (opCode == OpCodes.Brtrue)
-                return OpCodes.Brtrue_S;
-            else if (opCode == OpCodes.Beq)
-                return OpCodes.Beq_S;
-            else if (opCode == OpCodes.Bge)
-                return OpCodes.Bge_S;
-            else if (opCode == OpCodes.Bgt)
-                return OpCodes.Bgt_S;
-            else if (opCode == OpCodes.Ble)
-                return OpCodes.Ble_S;
-            else if (opCode == OpCodes.Blt)
-                return OpCodes.Blt_S;
-            else if (opCode == OpCodes.Bne_Un)
-                return OpCodes.Bne_Un_S;
-            else if (opCode == OpCodes.Bge_Un)
-                return OpCodes.Bge_Un_S;
-            else if (opCode == OpCodes.Bgt_Un)
-                return OpCodes.Bgt_Un_S;
-            else if (opCode == OpCodes.Ble_Un)
-                return OpCodes.Ble_Un_S;
-            else if (opCode == OpCodes.Blt_Un)
-                return OpCodes.Blt_Un_S;
-            else if (opCode == OpCodes.Leave)
-                return OpCodes.Leave_S;
-            else if (opCode == OpCodes.Br)
-                return OpCodes.Br_S;
-            else if (opCode == OpCodes.Brfalse)
-                return OpCodes.Brfalse_S;
-            else if (opCode == OpCodes.Brtrue)
-                return OpCodes.Brtrue_S;
-            else if (opCode == OpCodes.Beq)
-                return OpCodes.Beq_S;
-            else if (opCode == OpCodes.Bge)
-                return OpCodes.Bge_S;
-            else if (opCode == OpCodes.Bgt)
-                return OpCodes.Bgt_S;
-            else if (opCode == OpCodes.Ble)
-                return OpCodes.Ble_S;
-            else if (opCode == OpCodes.Blt)
-                return OpCodes.Blt_S;
-            else if (opCode == OpCodes.Bne_Un)
-                return OpCodes.Bne_Un_S;
-            else if (opCode == OpCodes.Bge_Un)
-                return OpCodes.Bge_Un_S;
-            else if (opCode == OpCodes.Bgt_Un)
-                return OpCodes.Bgt_Un_S;
-            else if (opCode == OpCodes.Ble_Un)
-                return OpCodes.Ble_Un_S;
-            else if (opCode == OpCodes.Blt_Un)
-                return OpCodes.Blt_Un_S;
-            else if (opCode == OpCodes.Leave)
-                return OpCodes.Leave_S;
-            else if (opCode == OpCodes.Br)
-                return OpCodes.Br_S;
-            else if (opCode == OpCodes.Brfalse)
-                return OpCodes.Brfalse_S;
-            else if (opCode == OpCodes.Brtrue)
-                return OpCodes.Brtrue_S;
-            else if (opCode == OpCodes.Beq)
-                return OpCodes.Beq_S;
-            else if (opCode == OpCodes.Bge)
-                return OpCodes.Bge_S;
-            else if (opCode == OpCodes.Bgt)
-                return OpCodes.Bgt_S;
-            else if (opCode == OpCodes.Ble)
-                return OpCodes.Ble_S;
-            else if (opCode == OpCodes.Blt)
-                return OpCodes.Blt_S;
-            else if (opCode == OpCodes.Bne_Un)
-                return OpCodes.Bne_Un_S;
-            else if (opCode == OpCodes.Bge_Un)
-                return OpCodes.Bge_Un_S;
-            else if (opCode == OpCodes.Bgt_Un)
-                return OpCodes.Bgt_Un_S;
-            else if (opCode == OpCodes.Ble_Un)
-                return OpCodes.Ble_Un_S;
-            else if (opCode == OpCodes.Blt_Un)
-                return OpCodes.Blt_Un_S;
-            else if (opCode == OpCodes.Leave)
-                return OpCodes.Leave_S;
-            else if (opCode == OpCodes.Br)
-                return OpCodes.Br_S;
-            else if (opCode == OpCodes.Brfalse)
-                return OpCodes.Brfalse_S;
-            else if (opCode == OpCodes.Brtrue)
-                return OpCodes.Brtrue_S;
-            else if (opCode == OpCodes.Beq)
-                return OpCodes.Beq_S;
-            else if (opCode == OpCodes.Bge)
-                return OpCodes.Bge_S;
-            else if (opCode == OpCodes.Bgt)
-                return OpCodes.Bgt_S;
-            else if (opCode == OpCodes.Ble)
-                return OpCodes.Ble_S;
-            else if (opCode == OpCodes.Blt)
-                return OpCodes.Blt_S;
-            else if (opCode == OpCodes.Bne_Un)
-                return OpCodes.Bne_Un_S;
-            else if (opCode == OpCodes.Bge_Un)
-                return OpCodes.Bge_Un_S;
-            else if (opCode == OpCodes.Bgt_Un)
-                return OpCodes.Bgt_Un_S;
-            else if (opCode == OpCodes.Ble_Un)
-                return OpCodes.Ble_Un_S;
-            else if (opCode == OpCodes.Blt_Un)
-                return OpCodes.Blt_Un_S;
-            else if (opCode == OpCodes.Leave)
-                return OpCodes.Leave_S;
-            else if (opCode == OpCodes.Br)
-                return OpCodes.Br_S;
-            else if (opCode == OpCodes.Brfalse)
-                return OpCodes.Brfalse_S;
-            else if (opCode == OpCodes.Brtrue)
-                return OpCodes.Brtrue_S;
-            else if (opCode == OpCodes.Beq)
-                return OpCodes.Beq_S;
-            else if (opCode == OpCodes.Bge)
-                return OpCodes.Bge_S;
-            else if (opCode == OpCodes.Bgt)
-                return OpCodes.Bgt_S;
-            else if (opCode == OpCodes.Ble)
-                return OpCodes.Ble_S;
-            else if (opCode == OpCodes.Blt)
-                return OpCodes.Blt_S;
-            else if (opCode == OpCodes.Bne_Un)
-                return OpCodes.Bne_Un_S;
-            else if (opCode == OpCodes.Bge_Un)
-                return OpCodes.Bge_Un_S;
-            else if (opCode == OpCodes.Bgt_Un)
-                return OpCodes.Bgt_Un_S;
-            else if (opCode == OpCodes.Ble_Un)
-                return OpCodes.Ble_Un_S;
-            else if (opCode == OpCodes.Blt_Un)
-                return OpCodes.Blt_Un_S;
-            else if (opCode == OpCodes.Leave)
-                return OpCodes.Leave_S;
-            else if (opCode == OpCodes.Br)
-                return OpCodes.Br_S;
-            else if (opCode == OpCodes.Brfalse)
-                return OpCodes.Brfalse_S;
-            else if (opCode == OpCodes.Brtrue)
-                return OpCodes.Brtrue_S;
-            else if (opCode == OpCodes.Beq)
-                return OpCodes.Beq_S;
-            else if (opCode == OpCodes.Bge)
-                return OpCodes.Bge_S;
-            else if (opCode == OpCodes.Bgt)
-                return OpCodes.Bgt_S;
-            else if (opCode == OpCodes.Ble)
-                return OpCodes.Ble_S;
-            else if (opCode == OpCodes.Blt)
-                return OpCodes.Blt_S;
-            else if (opCode == OpCodes.Bne_Un)
-                return OpCodes.Bne_Un_S;
-            else if (opCode == OpCodes.Bge_Un)
-                return OpCodes.Bge_Un_S;
-            else if (opCode == OpCodes.Bgt_Un)
-                return OpCodes.Bgt_Un_S;
-            else if (opCode == OpCodes.Ble_Un)
-                return OpCodes.Ble_Un_S;
-            else if (opCode == OpCodes.Blt_Un)
-                return OpCodes.Blt_Un_S;
-            else if (opCode == OpCodes.Leave)
-                return OpCodes.Leave_S;
-            else if (opCode == OpCodes.Br)
-                return OpCodes.Br_S;
-            else if (opCode == OpCodes.Brfalse)
-                return OpCodes.Brfalse_S;
-            else if (opCode == OpCodes.Brtrue)
-                return OpCodes.Brtrue_S;
-            else if (opCode == OpCodes.Beq)
-                return OpCodes.Beq_S;
-            else if (opCode == OpCodes.Bge)
-                return OpCodes.Bge_S;
-            else if (opCode == OpCodes.Bgt)
-                return OpCodes.Bgt_S;
-            else if (opCode == OpCodes.Ble)
-                return OpCodes.Ble_S;
-            else if (opCode == OpCodes.Blt)
-                return OpCodes.Blt_S;
-            else if (opCode == OpCodes.Bne_Un)
-                return OpCodes.Bne_Un_S;
-            else if (opCode == OpCodes.Bge_Un)
-                return OpCodes.Bge_Un_S;
-            else if (opCode == OpCodes.Bgt_Un)
-                return OpCodes.Bgt_Un_S;
-            else if (opCode == OpCodes.Ble_Un)
-                return OpCodes.Ble_Un_S;
-            else if (opCode == OpCodes.Blt_Un)
-                return OpCodes.Blt_Un_S;
-            else if (opCode == OpCodes.Leave)
-                return OpCodes.Leave_S;
-            else if (opCode == OpCodes.Br)
-                return OpCodes.Br_S;
-            else if (opCode == OpCodes.Brfalse)
-                return OpCodes.Brfalse_S;
-            else if (opCode == OpCodes.Brtrue)
-                return OpCodes.Brtrue_S;
-            else if (opCode == OpCodes.Beq)
-                return OpCodes.Beq_S;
-            else if (opCode == OpCodes.Bge)
-                return OpCodes.Bge_S;
-            else if (opCode == OpCodes.Bgt)
-                return OpCodes.Bgt_S;
-            else if (opCode == OpCodes.Ble)
-                return OpCodes.Ble_S;
-            else if (opCode == OpCodes.Blt)
-                return OpCodes.Blt_S;
-            else if (opCode == OpCodes.Bne_Un)
-                return OpCodes.Bne_Un_S;
-            else if (opCode == OpCodes.Bge_Un)
-                return OpCodes.Bge_Un_S;
-            else if (opCode == OpCodes.Bgt_Un)
-                return OpCodes.Bgt_Un_S;
-            else if (opCode == OpCodes.Ble_Un)
-                return OpCodes.Ble_Un_S;
-            else if (opCode == OpCodes.Blt_Un)
-                return OpCodes.Blt_Un_S;
-            else if (opCode == OpCodes.Leave)
-                return OpCodes.Leave_S;
-            else if (opCode == OpCodes.Br)
-                return OpCodes.Br_S;
-            else if (opCode == OpCodes.Brfalse)
-                return OpCodes.Brfalse_S;
-            else if (opCode == OpCodes.Brtrue)
-                return OpCodes.Brtrue_S;
-            else if (opCode == OpCodes.Beq)
-                return OpCodes.Beq_S;
-            else if (opCode == OpCodes.Bge)
-                return OpCodes.Bge_S;
-            else if (opCode == OpCodes.Bgt)
-                return OpCodes.Bgt_S;
-            else if (opCode == OpCodes.Ble)
-                return OpCodes.Ble_S;
-            else if (opCode == OpCodes.Blt)
-                return OpCodes.Blt_S;
-            else if (opCode == OpCodes.Bne_Un)
-                return OpCodes.Bne_Un_S;
-            else if (opCode == OpCodes.Bge_Un)
-                return OpCodes.Bge_Un_S;
-            else if (opCode == OpCodes.Bgt_Un)
-                return OpCodes.Bgt_Un_S;
-            else if (opCode == OpCodes.Ble_Un)
-                return OpCodes.Ble_Un_S;
-            else if (opCode == OpCodes.Blt_Un)
-                return OpCodes.Blt_Un_S;
-            else if (opCode == OpCodes.Leave)
-                return OpCodes.Leave_S;
-            else if (opCode == OpCodes.Br)
-                return OpCodes.Br_S;
-            else if (opCode == OpCodes.Brfalse)
-                return OpCodes.Brfalse_S;
-            else if (opCode == OpCodes.Brtrue)
-                return OpCodes.Brtrue_S;
-            else if (opCode == OpCodes.Beq)
-                return OpCodes.Beq_S;
-            else if (opCode == OpCodes.Bge)
-                return OpCodes.Bge_S;
-            else if (opCode == OpCodes.Bgt)
-                return OpCodes.Bgt_S;
-            else if (opCode == OpCodes.Ble)
-                return OpCodes.Ble_S;
-            else if (opCode == OpCodes.Blt)
-                return OpCodes.Blt_S;
-            else if (opCode == OpCodes.Bne_Un)
-                return OpCodes.Bne_Un_S;
-            else if (opCode == OpCodes.Bge_Un)
-                return OpCodes.Bge_Un_S;
-            else if (opCode == OpCodes.Bgt_Un)
-                return OpCodes.Bgt_Un_S;
-            else if (opCode == OpCodes.Ble_Un)
-                return OpCodes.Ble_Un_S;
-            else if (opCode == OpCodes.Blt_Un)
-                return OpCodes.Blt_Un_S;
-            else if (opCode == OpCodes.Leave)
-                return OpCodes.Leave_S;
-            else if (opCode == OpCodes.Br)
-                return OpCodes.Br_S;
-            else if (opCode == OpCodes.Brfalse)
-                return OpCodes.Brfalse_S;
-            else if (opCode == OpCodes.Brtrue)
-                return OpCodes.Brtrue_S;
-            else if (opCode == OpCodes.Beq)
-                return OpCodes.Beq_S;
-            else if (opCode == OpCodes.Bge)
-                return OpCodes.Bge_S;
-            else if (opCode == OpCodes.Bgt)
-                return OpCodes.Bgt_S;
-            else if (opCode == OpCodes.Ble)
-                return OpCodes.Ble_S;
-            else if (opCode == OpCodes.Blt)
-                return OpCodes.Blt_S;
-            else if (opCode == OpCodes.Bne_Un)
-                return OpCodes.Bne_Un_S;
-            else if (opCode == OpCodes.Bge_Un)
-                return OpCodes.Bge_Un_S;
-            else if (opCode == OpCodes.Bgt_Un)
-                return OpCodes.Bgt_Un_S;
-            else if (opCode == OpCodes.Ble_Un)
-                return OpCodes.Ble_Un_S;
-            else if (opCode == OpCodes.Blt_Un)
-                return OpCodes.Blt_Un_S;
-            else if (opCode == OpCodes.Leave)
-                return OpCodes.Leave_S;
-            else if (opCode == OpCodes.Br)
-                return OpCodes.Br_S;
-            else if (opCode == OpCodes.Brfalse)
-                return OpCodes.Brfalse_S;
-            else if (opCode == OpCodes.Brtrue)
-                return OpCodes.Brtrue_S;
-            else if (opCode == OpCodes.Beq)
-                return OpCodes.Beq_S;
-            else if (opCode == OpCodes.Bge)
-                return OpCodes.Bge_S;
-            else if (opCode == OpCodes.Bgt)
-                return OpCodes.Bgt_S;
-            else if (opCode == OpCodes.Ble)
-                return OpCodes.Ble_S;
-            else if (opCode == OpCodes.Blt)
-                return OpCodes.Blt_S;
-            else if (opCode == OpCodes.Bne_Un)
-                return OpCodes.Bne_Un_S;
-            else if (opCode == OpCodes.Bge_Un)
-                return OpCodes.Bge_Un_S;
-            else if (opCode == OpCodes.Bgt_Un)
-                return OpCodes.Bgt_Un_S;
-            else if (opCode == OpCodes.Ble_Un)
-                return OpCodes.Ble_Un_S;
-            else if (opCode == OpCodes.Blt_Un)
-                return OpCodes.Blt_Un_S;
-            else if (opCode == OpCodes.Leave)
-                return OpCodes.Leave_S;
-            else if (opCode == OpCodes.Br)
-                return OpCodes.Br_S;
-            else if (opCode == OpCodes.Brfalse)
-                return OpCodes.Brfalse_S;
-            else if (opCode == OpCodes.Brtrue)
-                return OpCodes.Brtrue_S;
-            else if (opCode == OpCodes.Beq)
-                return OpCodes.Beq_S;
-            else if (opCode == OpCodes.Bge)
-                return OpCodes.Bge_S;
-            else if (opCode == OpCodes.Bgt)
-                return OpCodes.Bgt_S;
-            else if (opCode == OpCodes.Ble)
-                return OpCodes.Ble_S;
-            else if (opCode == OpCodes.Blt)
-                return OpCodes.Blt_S;
-            else if (opCode == OpCodes.Bne_Un)
-                return OpCodes.Bne_Un_S;
-            else if (opCode == OpCodes.Bge_Un)
-                return OpCodes.Bge_Un_S;
-            else if (opCode == OpCodes.Bgt_Un)
-                return OpCodes.Bgt_Un_S;
-            else if (opCode == OpCodes.Ble_Un)
-                return OpCodes.Ble_Un_S;
-            else if (opCode == OpCodes.Blt_Un)
-                return OpCodes.Blt_Un_S;
-            else if (opCode == OpCodes.Leave)
-                return OpCodes.Leave_S;
-            else if (opCode == OpCodes.Br)
-                return OpCodes.Br_S;
-            else if (opCode == OpCodes.Brfalse)
-                return OpCodes.Brfalse_S;
-            else if (opCode == OpCodes.Brtrue)
-                return OpCodes.Brtrue_S;
-            else if (opCode == OpCodes.Beq)
-                return OpCodes.Beq_S;
-            else if (opCode == OpCodes.Bge)
-                return OpCodes.Bge_S;
-            else if (opCode == OpCodes.Bgt)
-                return OpCodes.Bgt_S;
-            else if (opCode == OpCodes.Ble)
-                return OpCodes.Ble_S;
-            else if (opCode == OpCodes.Blt)
-                return OpCodes.Blt_S;
-            else if (opCode == OpCodes.Bne_Un)
-                return OpCodes.Bne_Un_S;
-            else if (opCode == OpCodes.Bge_Un)
-                return OpCodes.Bge_Un_S;
-            else if (opCode == OpCodes.Bgt_Un)
-                return OpCodes.Bgt_Un_S;
-            else if (opCode == OpCodes.Ble_Un)
-                return OpCodes.Ble_Un_S;
-            else if (opCode == OpCodes.Blt_Un)
-                return OpCodes.Blt_Un_S;
-            else if (opCode == OpCodes.Leave)
-                return OpCodes.Leave_S;
-            else if (opCode == OpCodes.Br)
-                return OpCodes.Br_S;
-            else if (opCode == OpCodes.Brfalse)
-                return OpCodes.Brfalse_S;
-            else if (opCode == OpCodes.Brtrue)
-                return OpCodes.Brtrue_S;
-            else if (opCode == OpCodes.Beq)
-                return OpCodes.Beq_S;
-            else if (opCode == OpCodes.Bge)
-                return OpCodes.Bge_S;
-            else if (opCode == OpCodes.Bgt)
-                return OpCodes.Bgt_S;
-            else if (opCode == OpCodes.Ble)
-                return OpCodes.Ble_S;
-            else if (opCode == OpCodes.Blt)
-                return OpCodes.Blt_S;
-            else if (opCode == OpCodes.Bne_Un)
-                return OpCodes.Bne_Un_S;
-            else if (opCode == OpCodes.Bge_Un)
-                return OpCodes.Bge_Un_S;
-            else if (opCode == OpCodes.Bgt_Un)
-                return OpCodes.Bgt_Un_S;
-            else if (opCode == OpCodes.Ble_Un)
-                return OpCodes.Ble_Un_S;
-            else if (opCode == OpCodes.Blt_Un)
-                return OpCodes.Blt_Un_S;
-            else if (opCode == OpCodes.Leave)
-                return OpCodes.Leave_S;
-            else if (opCode == OpCodes.Br)
-                return OpCodes.Br_S;
-            else if (opCode == OpCodes.Brfalse)
-                return OpCodes.Brfalse_S;
-            else if (opCode == OpCodes.Brtrue)
-                return OpCodes.Brtrue_S;
-            else if (opCode == OpCodes.Beq)
-                return OpCodes.Beq_S;
-            else if (opCode == OpCodes.Bge)
-                return OpCodes.Bge_S;
-            else if (opCode == OpCodes.Bgt)
-                return OpCodes.Bgt_S;
-            else if (opCode == OpCodes.Ble)
-                return OpCodes.Ble_S;
-            else if (opCode == OpCodes.Blt)
-                return OpCodes.Blt_S;
-            else if (opCode == OpCodes.Bne_Un)
-                return OpCodes.Bne_Un_S;
-            else if (opCode == OpCodes.Bge_Un)
-                return OpCodes.Bge_Un_S;
-            else if (opCode == OpCodes.Bgt_Un)
-                return OpCodes.Bgt_Un_S;
-            else if (opCode == OpCodes.Ble_Un)
-                return OpCodes.Ble_Un_S;
-            else if (opCode == OpCodes.Blt_Un)
-                return OpCodes.Blt_Un_S;
-            else if (opCode == OpCodes.Leave)
-                return OpCodes.Leave_S;
-            else if (opCode == OpCodes.Br)
-                return OpCodes.Br_S;
-            else if (opCode == OpCodes.Brfalse)
-                return OpCodes.Brfalse_S;
-            else if (opCode == OpCodes.Brtrue)
-                return OpCodes.Brtrue_S;
-            else if (opCode == OpCodes.Beq)
-                return OpCodes.Beq_S;
-            else if (opCode == OpCodes.Bge)
-                return OpCodes.Bge_S;
-            else if (opCode == OpCodes.Bgt)
-                return OpCodes.Bgt_S;
-            else if (opCode == OpCodes.Ble)
-                return OpCodes.Ble_S;
-            else if (opCode == OpCodes.Blt)
-                return OpCodes.Blt_S;
-            else if (opCode == OpCodes.Bne_Un)
-                return OpCodes.Bne_Un_S;
-            else if (opCode == OpCodes.Bge_Un)
-                return OpCodes.Bge_Un_S;
-            else if (opCode == OpCodes.Bgt_Un)
-                return OpCodes.Bgt_Un_S;
-            else if (opCode == OpCodes.Ble_Un)
-                return OpCodes.Ble_Un_S;
-            else if (opCode == OpCodes.Blt_Un)
-                return OpCodes.Blt_Un_S;
-            else if (opCode == OpCodes.Leave)
-                return OpCodes.Leave_S;
-            else if (opCode == OpCodes.Br)
-                return OpCodes.Br_S;
-            else if (opCode == OpCodes.Brfalse)
-                return OpCodes.Brfalse_S;
-            else if (opCode == OpCodes.Brtrue)
-                return OpCodes.Brtrue_S;
-            else if (opCode == OpCodes.Beq)
-                return OpCodes.Beq_S;
-            else if (opCode == OpCodes.Bge)
-                return OpCodes.Bge_S;
-            else if (opCode == OpCodes.Bgt)
-                return OpCodes.Bgt_S;
-            else if (opCode == OpCodes.Ble)
-                return OpCodes.Ble_S;
-            else if (opCode == OpCodes.Blt)
-                return OpCodes.Blt_S;
-            else if (opCode == OpCodes.Bne_Un)
-                return OpCodes.Bne_Un_S;
-            else if (opCode == OpCodes.Bge_Un)
-                return OpCodes.Bge_Un_S;
-            else if (opCode == OpCodes.Bgt_Un)
-                return OpCodes.Bgt_Un_S;
-            else if (opCode == OpCodes.Ble_Un)
-                return OpCodes.Ble_Un_S;
-            else if (opCode == OpCodes.Blt_Un)
-                return OpCodes.Blt_Un_S;
-            else if (opCode == OpCodes.Leave)
-                return OpCodes.Leave_S;
-            else if (opCode == OpCodes.Br)
-                return OpCodes.Br_S;
-            else if (opCode == OpCodes.Brfalse)
-                return OpCodes.Brfalse_S;
-            else if (opCode == OpCodes.Brtrue)
-                return OpCodes.Brtrue_S;
-            else if (opCode == OpCodes.Beq)
-                return OpCodes.Beq_S;
-            else if (opCode == OpCodes.Bge)
-                return OpCodes.Bge_S;
-            else if (opCode == OpCodes.Bgt)
-                return OpCodes.Bgt_S;
-            else if (opCode == OpCodes.Ble)
-                return OpCodes.Ble_S;
-            else if (opCode == OpCodes.Blt)
-                return OpCodes.Blt_S;
-            else if (opCode == OpCodes.Bne_Un)
-                return OpCodes.Bne_Un_S;
-            else if (opCode == OpCodes.Bge_Un)
-                return OpCodes.Bge_Un_S;
-            else if (opCode == OpCodes.Bgt_Un)
-                return OpCodes.Bgt_Un_S;
-            else if (opCode == OpCodes.Ble_Un)
-                return OpCodes.Ble_Un_S;
-            else if (opCode == OpCodes.Blt_Un)
-                return OpCodes.Blt_Un_S;
-            else if (opCode == OpCodes.Leave)
-                return OpCodes.Leave_S;
-            else if (opCode == OpCodes.Br)
-                return OpCodes.Br_S;
-            else if (opCode == OpCodes.Brfalse)
-                return OpCodes.Brfalse_S;
-            else if (opCode == OpCodes.Brtrue)
-                return OpCodes.Brtrue_S;
-            else if (opCode == OpCodes.Beq)
-                return OpCodes.Beq_S;
-            else if (opCode == OpCodes.Bge)
-                return OpCodes.Bge_S;
-            else if (opCode == OpCodes.Bgt)
-                return OpCodes.Bgt_S;
-            else if (opCode == OpCodes.Ble)
-                return OpCodes.Ble_S;
-            else if (opCode == OpCodes.Blt)
-                return OpCodes.Blt_S;
-            else if (opCode == OpCodes.Bne_Un)
-                return OpCodes.Bne_Un_S;
-            else if (opCode == OpCodes.Bge_Un)
-                return OpCodes.Bge_Un_S;
-            else if (opCode == OpCodes.Bgt_Un)
-                return OpCodes.Bgt_Un_S;
-            else if (opCode == OpCodes.Ble_Un)
-                return OpCodes.Ble_Un_S;
-            else if (opCode == OpCodes.Blt_Un)
-                return OpCodes.Blt_Un_S;
-            else if (opCode == OpCodes.Leave)
-                return OpCodes.Leave_S;
-            else if (opCode == OpCodes.Br)
-                return OpCodes.Br_S;
-            else if (opCode == OpCodes.Brfalse)
-                return OpCodes.Brfalse_S;
-            else if (opCode == OpCodes.Brtrue)
-                return OpCodes.Brtrue_S;
-            else if (opCode == OpCodes.Beq)
-                return OpCodes.Beq_S;
-            else if (opCode == OpCodes.Bge)
-                return OpCodes.Bge_S;
-            else if (opCode == OpCodes.Bgt)
-                return OpCodes.Bgt_S;
-            else if (opCode == OpCodes.Ble)
-                return OpCodes.Ble_S;
-            else if (opCode == OpCodes.Blt)
-                return OpCodes.Blt_S;
-            else if (opCode == OpCodes.Bne_Un)
-                return OpCodes.Bne_Un_S;
-            else if (opCode == OpCodes.Bge_Un)
-                return OpCodes.Bge_Un_S;
-            else if (opCode == OpCodes.Bgt_Un)
-                return OpCodes.Bgt_Un_S;
-            else if (opCode == OpCodes.Ble_Un)
-                return OpCodes.Ble_Un_S;
-            else if (opCode == OpCodes.Blt_Un)
-                return OpCodes.Blt_Un_S;
-            else if (opCode == OpCodes.Leave)
-                return OpCodes.Leave_S;
-            else if (opCode == OpCodes.Br)
-                return OpCodes.Br_S;
-            else if (opCode == OpCodes.Brfalse)
-                return OpCodes.Brfalse_S;
-            else if (opCode == OpCodes.Brtrue)
-                return OpCodes.Brtrue_S;
-            else if (opCode == OpCodes.Beq)
-                return OpCodes.Beq_S;
-            else if (opCode == OpCodes.Bge)
-                return OpCodes.Bge_S;
-            else if (opCode == OpCodes.Bgt)
-                return OpCodes.Bgt_S;
-            else if (opCode == OpCodes.Ble)
-                return OpCodes.Ble_S;
-            else if (opCode == OpCodes.Blt)
-                return OpCodes.Blt_S;
-            else if (opCode == OpCodes.Bne_Un)
-                return OpCodes.Bne_Un_S;
-            else if (opCode == OpCodes.Bge_Un)
-                return OpCodes.Bge_Un_S;
-            else if (opCode == OpCodes.Bgt_Un)
-                return OpCodes.Bgt_Un_S;
-            else if (opCode == OpCodes.Ble_Un)
-                return OpCodes.Ble_Un_S;
-            else if (opCode == OpCodes.Blt_Un)
-                return OpCodes.Blt_Un_S;
-            else if (opCode == OpCodes.Leave)
-                return OpCodes.Leave_S;
-            else if (opCode == OpCodes.Br)
-                return OpCodes.Br_S;
-            else if (opCode == OpCodes.Brfalse)
-                return OpCodes.Brfalse_S;
-            else if (opCode == OpCodes.Brtrue)
-                return OpCodes.Brtrue_S;
-            else if (opCode == OpCodes.Beq)
-                return OpCodes.Beq_S;
-            else if (opCode == OpCodes.Bge)
-                return OpCodes.Bge_S;
-            else if (opCode == OpCodes.Bgt)
-                return OpCodes.Bgt_S;
-            else if (opCode == OpCodes.Ble)
-                return OpCodes.Ble_S;
-            else if (opCode == OpCodes.Blt)
-                return OpCodes.Blt_S;
-            else if (opCode == OpCodes.Bne_Un)
-                return OpCodes.Bne_Un_S;
-            else if (opCode == OpCodes.Bge_Un)
-                return OpCodes.Bge_Un_S;
-            else if (opCode == OpCodes.Bgt_Un)
-                return OpCodes.Bgt_Un_S;
-            else if (opCode == OpCodes.Ble_Un)
-                return OpCodes.Ble_Un_S;
-            else if (opCode == OpCodes.Blt_Un)
-                return OpCodes.Blt_Un_S;
-            else if (opCode == OpCodes.Leave)
-                return OpCodes.Leave_S;
-            else if (opCode == OpCodes.Br)
-                return OpCodes.Br_S;
-            else if (opCode == OpCodes.Brfalse)
-                return OpCodes.Brfalse_S;
-            else if (opCode == OpCodes.Brtrue)
-                return OpCodes.Brtrue_S;
-            else if (opCode == OpCodes.Beq)
-                return OpCodes.Beq_S;
-            else if (opCode == OpCodes.Bge)
-                return OpCodes.Bge_S;
-            else if (opCode == OpCodes.Bgt)
-                return OpCodes.Bgt_S;
-            else if (opCode == OpCodes.Ble)
-                return OpCodes.Ble_S;
-            else if (opCode == OpCodes.Blt)
-                return OpCodes.Blt_S;
-            else if (opCode == OpCodes.Bne_Un)
-                return OpCodes.Bne_Un_S;
-            else if (opCode == OpCodes.Bge_Un)
-                return OpCodes.Bge_Un_S;
-            else if (opCode == OpCodes.Bgt_Un)
-                return OpCodes.Bgt_Un_S;
-            else if (opCode == OpCodes.Ble_Un)
-                return OpCodes.Ble_Un_S;
-            else if (opCode == OpCodes.Blt_Un)
-                return OpCodes.Blt_Un_S;
-            else if (opCode == OpCodes.Leave)
-                return OpCodes.Leave_S;
-            else if (opCode == OpCodes.Br)
-                return OpCodes.Br_S;
-            else if (opCode == OpCodes.Brfalse)
-                return OpCodes.Brfalse_S;
-            else if (opCode == OpCodes.Brtrue)
-                return OpCodes.Brtrue_S;
-            else if (opCode == OpCodes.Beq)
-                return OpCodes.Beq_S;
-            else if (opCode == OpCodes.Bge)
-                return OpCodes.Bge_S;
-            else if (opCode == OpCodes.Bgt)
-                return OpCodes.Bgt_S;
-            else if (opCode == OpCodes.Ble)
-                return OpCodes.Ble_S;
-            else if (opCode == OpCodes.Blt)
-                return OpCodes.Blt_S;
-            else if (opCode == OpCodes.Bne_Un)
-                return OpCodes.Bne_Un_S;
-            else if (opCode == OpCodes.Bge_Un)
-                return OpCodes.Bge_Un_S;
-            else if (opCode == OpCodes.Bgt_Un)
-                return OpCodes.Bgt_Un_S;
-            else if (opCode == OpCodes.Ble_Un)
-                return OpCodes.Ble_Un_S;
-            else if (opCode == OpCodes.Blt_Un)
-                return OpCodes.Blt_Un_S;
-            else if (opCode == OpCodes.Leave)
-                return OpCodes.Leave_S;
-            else if (opCode == OpCodes.Br)
-                return OpCodes.Br_S;
-            else if (opCode == OpCodes.Brfalse)
-                return OpCodes.Brfalse_S;
-            else if (opCode == OpCodes.Brtrue)
-                return OpCodes.Brtrue_S;
-            else if (opCode == OpCodes.Beq)
-                return OpCodes.Beq_S;
-            else if (opCode == OpCodes.Bge)
-                return OpCodes.Bge_S;
-            else if (opCode == OpCodes.Bgt)
-                return OpCodes.Bgt_S;
-            else if (opCode == OpCodes.Ble)
-                return OpCodes.Ble_S;
-            else if (opCode == OpCodes.Blt)
-                return OpCodes.Blt_S;
-            else if (opCode == OpCodes.Bne_Un)
-                return OpCodes.Bne_Un_S;
-            else if (opCode == OpCodes.Bge_Un)
-                return OpCodes.Bge_Un_S;
-            else if (opCode == OpCodes.Bgt_Un)
-                return OpCodes.Bgt_Un_S;
-            else if (opCode == OpCodes.Ble_Un)
-                return OpCodes.Ble_Un_S;
-            else if (opCode == OpCodes.Blt_Un)
-                return OpCodes.Blt_Un_S;
-            else if (opCode == OpCodes.Leave)
-                return OpCodes.Leave_S;
-            else if (opCode == OpCodes.Br)
-                return OpCodes.Br_S;
-            else if (opCode == OpCodes.Brfalse)
-                return OpCodes.Brfalse_S;
-            else if (opCode == OpCodes.Brtrue)
-                return OpCodes.Brtrue_S;
-            else if (opCode == OpCodes.Beq)
-                return OpCodes.Beq_S;
-            else if (opCode == OpCodes.Bge)
-                return OpCodes.Bge_S;
-            else if (opCode == OpCodes.Bgt)
-                return OpCodes.Bgt_S;
-            else if (opCode == OpCodes.Ble)
-                return OpCodes.Ble_S;
-            else if (opCode == OpCodes.Blt)
-                return OpCodes.Blt_S;
-            else if (opCode == OpCodes.Bne_Un)
-                return OpCodes.Bne_Un_S;
-            else if (opCode == OpCodes.Bge_Un)
-                return OpCodes.Bge_Un_S;
-            else if (opCode == OpCodes.Bgt_Un)
-                return OpCodes.Bgt_Un_S;
-            else if (opCode == OpCodes.Ble_Un)
-                return OpCodes.Ble_Un_S;
-            else if (opCode == OpCodes.Blt_Un)
-                return OpCodes.Blt_Un_S;
-            else if (opCode == OpCodes.Leave)
-                return OpCodes.Leave_S;
-            else if (opCode == OpCodes.Br)
-                return OpCodes.Br_S;
-            else if (opCode == OpCodes.Brfalse)
-                return OpCodes.Brfalse_S;
-            else if (opCode == OpCodes.Brtrue)
-                return OpCodes.Brtrue_S;
-            else if (opCode == OpCodes.Beq)
-                return OpCodes.Beq_S;
-            else if (opCode == OpCodes.Bge)
-                return OpCodes.Bge_S;
-            else if (opCode == OpCodes.Bgt)
-                return OpCodes.Bgt_S;
-            else if (opCode == OpCodes.Ble)
-                return OpCodes.Ble_S;
-            else if (opCode == OpCodes.Blt)
-                return OpCodes.Blt_S;
-            else if (opCode == OpCodes.Bne_Un)
-                return OpCodes.Bne_Un_S;
-            else if (opCode == OpCodes.Bge_Un)
-                return OpCodes.Bge_Un_S;
-            else if (opCode == OpCodes.Bgt_Un)
-                return OpCodes.Bgt_Un_S;
-            else if (opCode == OpCodes.Ble_Un)
-                return OpCodes.Ble_Un_S;
-            else if (opCode == OpCodes.Blt_Un)
-                return OpCodes.Blt_Un_S;
-            else if (opCode == OpCodes.Leave)
-                return OpCodes.Leave_S;
-            else if (opCode == OpCodes.Br)
-                return OpCodes.Br_S;
-            else if (opCode == OpCodes.Brfalse)
-                return OpCodes.Brfalse_S;
-            else if (opCode == OpCodes.Brtrue)
-                return OpCodes.Brtrue_S;
-            else if (opCode == OpCodes.Beq)
-                return OpCodes.Beq_S;
-            else if (opCode == OpCodes.Bge)
-                return OpCodes.Bge_S;
-            else if (opCode == OpCodes.Bgt)
-                return OpCodes.Bgt_S;
-            else if (opCode == OpCodes.Ble)
-                return OpCodes.Ble_S;
-            else if (opCode == OpCodes.Blt)
-                return OpCodes.Blt_S;
-            else if (opCode == OpCodes.Bne_Un)
-                return OpCodes.Bne_Un_S;
-            else if (opCode == OpCodes.Bge_Un)
-                return OpCodes.Bge_Un_S;
-            else if (opCode == OpCodes.Bgt_Un)
-                return OpCodes.Bgt_Un_S;
-            else if (opCode == OpCodes.Ble_Un)
-                return OpCodes.Ble_Un_S;
-            else if (opCode == OpCodes.Blt_Un)
-                return OpCodes.Blt_Un_S;
-            else if (opCode == OpCodes.Leave)
-                return OpCodes.Leave;
             return opCode;
+        }
+
+        public static bool TryGetConstArgument(this Instruction call, string name, out object result)
+        {
+            if (!call.TryGetPushArgumentInstruction(name, out var instruction))
+            {
+                result = null;
+                return false;
+            }
+
+            return instruction.TryGetConstValue(out result);
+        }
+
+        public static bool TryGetConstArgument(this Instruction call, int argNumber, out object result)
+        {
+            if (!call.TryGetPushArgumentInstruction(argNumber, out var instruction))
+            {
+                result = null;
+                return false;
+            }
+
+            return instruction.TryGetConstValue(out result);
+        }
+
+        public static bool TryGetConstArgument(this Instruction call, Type type, string name, out object result)
+        {
+            if (!call.TryGetPushArgumentInstruction(name, out var instruction))
+            {
+                result = default;
+                return false;
+            }
+
+            return instruction.TryGetConstValue(type, out result);
+        }
+
+        public static bool TryGetConstArgument(this Instruction call, Type type, int argNumber, out object result)
+        {
+            if (!call.TryGetPushArgumentInstruction(argNumber, out var instruction))
+            {
+                result = default;
+                return false;
+            }
+
+            return instruction.TryGetConstValue(type, out result);
+        }
+
+        public static bool TryGetConstArgument<T>(this Instruction call, string name, out T result)
+        {
+            if (!call.TryGetPushArgumentInstruction(name, out var instruction))
+            {
+                result = default;
+                return false;
+            }
+
+            return instruction.TryGetConstValue(out result);
+        }
+
+        public static bool TryGetConstArgument<T>(this Instruction call, int argNumber, out T result)
+        {
+            if (!call.TryGetPushArgumentInstruction(argNumber, out var instruction))
+            {
+                result = default;
+                return false;
+            }
+
+            return instruction.TryGetConstValue(out result);
+        }
+
+        public static bool TryGetPushConstArgumentInstruction(this Instruction call, string name, out object value, out Instruction instruction)
+        {
+            if (!call.TryGetPushArgumentInstruction(name, out instruction))
+            {
+                value = null;
+                return false;
+            }
+
+            return instruction.TryGetConstValue(out value);
+        }
+
+        public static bool TryGetPushConstArgumentInstruction(this Instruction call, int argNumber, out object value, out Instruction instruction)
+        {
+            if (!call.TryGetPushArgumentInstruction(argNumber, out instruction))
+            {
+                value = null;
+                return false;
+            }
+
+            return instruction.TryGetConstValue(out value);
+        }
+
+        public static bool TryGetPushConstArgumentInstruction(this Instruction call, Type type, string name, out object value, out Instruction instruction)
+        {
+            if (!call.TryGetPushArgumentInstruction(name, out instruction))
+            {
+                value = null;
+                return false;
+            }
+
+            return instruction.TryGetConstValue(type, out value);
+        }
+
+        public static bool TryGetPushConstArgumentInstruction(this Instruction call, Type type, int argNumber, out object value, out Instruction instruction)
+        {
+            if (!call.TryGetPushArgumentInstruction(argNumber, out instruction))
+            {
+                value = null;
+                return false;
+            }
+
+            return instruction.TryGetConstValue(type, out value);
+        }
+
+        public static bool TryGetPushConstArgumentInstruction<T>(this Instruction call, string name, out T value, out Instruction instruction)
+        {
+            if (!call.TryGetPushArgumentInstruction(name, out instruction))
+            {
+                value = default;
+                return false;
+            }
+
+            return instruction.TryGetConstValue(out value);
+        }
+
+        public static bool TryGetPushConstArgumentInstruction<T>(this Instruction call, int argNumber, out T value, out Instruction instruction)
+        {
+            if (!call.TryGetPushArgumentInstruction(argNumber, out instruction))
+            {
+                value = default;
+                return false;
+            }
+
+            return instruction.TryGetConstValue(out value);
+        }
+
+        public static bool TryGetPushConstArgumentInstructions(this Instruction call, string name, out object value, List<Instruction> instructions)
+        {
+            if (!call.TryGetPushArgumentInstruction(name, out var instruction))
+            {
+                value = null;
+                return false;
+            }
+
+            return instruction.TryGetConstValue(out value, instructions);
+        }
+
+        public static bool TryGetPushConstArgumentInstructions(this Instruction call, int argNumber, out object value, List<Instruction> instructions)
+        {
+            if (!call.TryGetPushArgumentInstruction(argNumber, out var instruction))
+            {
+                value = null;
+                return false;
+            }
+
+            return instruction.TryGetConstValue(out value, instructions);
+        }
+
+        public static bool TryGetPushConstArgumentInstructions(this Instruction call, Type type, string name, out object value, List<Instruction> instructions)
+        {
+            if (!call.TryGetPushArgumentInstruction(name, out var instruction))
+            {
+                value = null;
+                return false;
+            }
+
+            return instruction.TryGetConstValue(type, out value, instructions);
+        }
+
+        public static bool TryGetPushConstArgumentInstructions(this Instruction call, Type type, int argNumber, out object value, List<Instruction> instructions)
+        {
+            if (!call.TryGetPushArgumentInstruction(argNumber, out var instruction))
+            {
+                value = null;
+                return false;
+            }
+
+            return instruction.TryGetConstValue(type, out value, instructions);
+        }
+
+        public static bool TryGetPushConstArgumentInstructions<T>(this Instruction call, string name, out T value, List<Instruction> instructions)
+        {
+            if (!call.TryGetPushArgumentInstruction(name, out var instruction))
+            {
+                value = default;
+                return false;
+            }
+
+            return instruction.TryGetConstValue(out value, instructions);
+        }
+
+        public static bool TryGetPushConstArgumentInstructions<T>(this Instruction call, int argNumber, out T value, List<Instruction> instructions)
+        {
+            if (!call.TryGetPushArgumentInstruction(argNumber, out var instruction))
+            {
+                value = default;
+                return false;
+            }
+
+            return instruction.TryGetConstValue(out value, instructions);
+        }
+
+        public static bool TryGetPushArgumentInstruction(this Instruction call, string argName, out Instruction arg)
+        {
+            arg = null;
+            if (call.OpCode != OpCodes.Call &&
+                call.OpCode != OpCodes.Callvirt)
+            {
+                return false;
+            }
+
+            if (!(call.Operand is MethodReference method))
+            {
+                return false;
+            }
+
+            var methodDef = method.Resolve();
+            try
+            {
+                var argNumber = methodDef.Parameters.Select((v, i) => (v, i)).First(v => v.v.Name == argName).i;
+                return TryGetStackPushedInstruction(call, argNumber - method.Parameters.Count, out arg);
+            }
+            catch
+            {
+                return false;
+            }
         }
 
         public static bool TryGetPushArgumentInstruction(this Instruction call, int argNumber, out Instruction arg)
@@ -4173,7 +2959,7 @@ namespace Katuusagi.ILPostProcessorCommon.Editor
             var instruction = GetPrev(call);
             while (instruction != null)
             {
-                var pushCount = instruction.OpCode.GetPushCount();
+                var pushCount = instruction.GetPushCount();
                 var beforeStackCount = stackCount;
                 stackCount -= pushCount;
                 if (beforeStackCount > targetRelativeStackCount && targetRelativeStackCount >= stackCount)
@@ -4182,7 +2968,7 @@ namespace Katuusagi.ILPostProcessorCommon.Editor
                     return true;
                 }
 
-                var popCount = instruction.OpCode.GetPopCount();
+                var popCount = instruction.GetPopCount();
                 if (popCount == -1)
                 {
                     return false;
@@ -4192,6 +2978,58 @@ namespace Katuusagi.ILPostProcessorCommon.Editor
             }
 
             return false;
+        }
+
+        public static void GetJumpTargets(this MethodBody body, HashSet<Instruction> result)
+        {
+            foreach (var instruction in body.Instructions)
+            {
+                switch (instruction.OpCode.FlowControl)
+                {
+                    case FlowControl.Branch:
+                    case FlowControl.Cond_Branch:
+                        if (instruction.Operand is Instruction target)
+                        {
+                            result.Add(target);
+                        }
+                        else if (instruction.Operand is Instruction[] targets)
+                        {
+                            foreach (var t in targets)
+                            {
+                                result.Add(t);
+                            }
+                        }
+                        break;
+                }
+            }
+
+            foreach (var h in body.ExceptionHandlers)
+            {
+                result.Add(h.HandlerStart);
+                result.Add(h.FilterStart);
+            }
+        }
+
+        public static int GetPushCount(this Instruction instruction)
+        {
+            if (instruction.OpCode == OpCodes.Call || instruction.OpCode == OpCodes.Callvirt)
+            {
+                var method = instruction.Operand as MethodReference;
+                return method.ReturnType.FullName == "System.Void" ? 0 : 1;
+            }
+
+            return instruction.OpCode.GetPushCount();
+        }
+
+        public static int GetPopCount(this Instruction instruction)
+        {
+            if (instruction.OpCode == OpCodes.Call || instruction.OpCode == OpCodes.Callvirt)
+            {
+                var method = instruction.Operand as MethodReference;
+                return method.Parameters.Count;
+            }
+
+            return instruction.OpCode.GetPopCount();
         }
 
         public static int GetPushCount(this OpCode opCode)

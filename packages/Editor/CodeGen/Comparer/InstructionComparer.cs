@@ -18,7 +18,8 @@ namespace Katuusagi.ILPostProcessorCommon.Editor
             }
 
             if (x.Operand == y.Operand ||
-                Equals(x.Operand, y.Operand))
+                (x.Operand == null && y.Operand == null) ||
+                x.Operand.Equals(y.Operand))
             {
                 return true;
             }

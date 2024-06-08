@@ -17,7 +17,7 @@ namespace Katuusagi.ILPostProcessorCommon.Editor
             public byte First;
         }
 
-        private Dictionary<object, FieldReference> _constFields = new Dictionary<object, FieldReference>(LiteralComparer.Default);
+        private Dictionary<(Type, object), FieldReference> _constFields = new Dictionary<(Type, object), FieldReference>(LiteralComparer.Default);
         private TypeDefinition _constTableType;
         private MethodDefinition _constTableConstructor;
 
@@ -37,14 +37,21 @@ namespace Katuusagi.ILPostProcessorCommon.Editor
             _constTableConstructor.Body.Instructions.Add(Instruction.Create(OpCodes.Ret));
         }
 
-        public Instruction LoadValue(object constantValue)
+        public Instruction LoadValue(Type type, object constantValue)
         {
+            if (constantValue != null &&
+                constantValue.GetType().IsValueType && !type.IsValueType)
+            {
+                var field = GetBoxingField(constantValue);
+                return Instruction.Create(OpCodes.Ldsfld, field);
+            }
+
             var loadLiteral = ILPPUtils.LoadLiteral(constantValue);
             if (loadLiteral != null)
             {
                 return loadLiteral;
             }
-
+            
             if (constantValue is IReadOnlyArray array)
             {
                 var field = GetReadOnlyArrayField(array);
@@ -77,7 +84,7 @@ namespace Katuusagi.ILPostProcessorCommon.Editor
                 return null;
             }
 
-            return GetField(obj, (o, objType, field, instructions) =>
+            return GetField(obj.GetType(), obj, (o, objType, field, instructions) =>
             {
                 int size = Marshal.SizeOf(o);
                 ref var b = ref UnsafeUtility.As<object, CopyObject>(ref o);
@@ -122,7 +129,7 @@ namespace Katuusagi.ILPostProcessorCommon.Editor
                 return null;
             }
 
-            return GetField(array, (o, objType, field, instructions) =>
+            return GetField(array.GetType(), array, (o, objType, field, instructions) =>
             {
                 var a = o as IReadOnlyArray;
 
@@ -150,15 +157,33 @@ namespace Katuusagi.ILPostProcessorCommon.Editor
             });
         }
 
-        public FieldReference GetField(object obj, Action<object, TypeReference, FieldReference, Collection<Instruction>> initialize)
+        public FieldReference GetBoxingField(object constantValue)
         {
-            if (_constFields.TryGetValue(obj, out FieldReference value))
+            if (constantValue == null)
+            {
+                return null;
+            }
+
+            return GetField(typeof(object), constantValue, (o, objType, field, instructions) =>
+            {
+                var oType = o.GetType();
+                var load = LoadValue(oType, o);
+                instructions.Add(load);
+                instructions.Add(Instruction.Create(OpCodes.Box, _constTableConstructor.Module.ImportReference(oType)));
+                instructions.Add(Instruction.Create(OpCodes.Stsfld, field));
+            });
+        }
+
+        public FieldReference GetField(Type type, object obj, Action<object, TypeReference, FieldReference, Collection<Instruction>> initialize)
+        {
+            var key = (type, obj);
+            if (_constFields.TryGetValue(key, out FieldReference value))
             {
                 return value;
             }
 
             // インポート
-            var objType = _constTableType.Module.ImportReference(obj.GetType());
+            var objType = _constTableType.Module.ImportReference(type);
 
             // 初期値相当のメンバ変数を作成
             var field = new FieldDefinition($"${_constFields.Count}", FieldAttributes.Public | FieldAttributes.Static | FieldAttributes.InitOnly, objType);
@@ -170,7 +195,7 @@ namespace Katuusagi.ILPostProcessorCommon.Editor
 
             // メンバ変数情報をテーブルに保持
             value = field;
-            _constFields.Add(obj, value);
+            _constFields.Add(key, value);
             return value;
         }
 

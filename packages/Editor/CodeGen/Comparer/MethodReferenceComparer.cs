@@ -22,7 +22,26 @@ namespace Katuusagi.ILPostProcessorCommon.Editor
                 return false;
             }
 
+            if (x.GetType() == y.GetType())
+            {
+                if (x is GenericInstanceMethod gx &&
+                    y is GenericInstanceMethod gy)
+                {
+                    if (!gx.GenericArguments.SequenceEqual(gy.GenericArguments, TypeReferenceComparer.Default))
+                    {
+                        return false;
+                    }
+                }
+            }
+
             if (x.Name != y.Name)
+            {
+                return false;
+            }
+
+            var xd = x.DeclaringType;
+            var yd = y.DeclaringType;
+            if (!xd.Is(yd))
             {
                 return false;
             }
@@ -33,17 +52,16 @@ namespace Katuusagi.ILPostProcessorCommon.Editor
             {
                 return false;
             }
-
             if (isGenDefX)
             {
-                if (!x.Parameters.Select(v => v.ParameterType.FullName).SequenceEqual(y.Parameters.Select(v => v.ParameterType.FullName)))
+                var xgr = x.ReturnType;
+                var ygr = y.ReturnType;
+                if (!TypeReferenceComparer.SkipGenericMethodOwner.Equals(xgr, ygr))
                 {
                     return false;
                 }
 
-                var xd = x.DeclaringType?.GetElementType();
-                var yd = y.DeclaringType?.GetElementType();
-                if (!xd.Is(yd))
+                if (!x.Parameters.Select(v => v.ParameterType).SequenceEqual(y.Parameters.Select(v => v.ParameterType), TypeReferenceComparer.SkipGenericMethodOwner))
                 {
                     return false;
                 }
@@ -51,26 +69,16 @@ namespace Katuusagi.ILPostProcessorCommon.Editor
                 return x.GenericParameters.Count == y.GenericParameters.Count;
             }
 
+            var xr = x.ReturnType;
+            var yr = y.ReturnType;
+            if (!xr.Is(yr))
+            {
+                return false;
+            }
+
             if (!x.Parameters.Select(v => v.ParameterType).SequenceEqual(y.Parameters.Select(v => v.ParameterType), TypeReferenceComparer.Default))
             {
                 return false;
-            }
-
-            if (!x.DeclaringType.Is(y.DeclaringType))
-            {
-                return false;
-            }
-            
-            var gx = x as GenericInstanceMethod;
-            var gy = y as GenericInstanceMethod;
-            if ((gx != null) != (gy != null))
-            {
-                return false;
-            }
-
-            if (gx != null)
-            {
-                return gx.GenericArguments.SequenceEqual(gy.GenericArguments, TypeReferenceComparer.Default);
             }
 
             return true;
@@ -84,16 +92,25 @@ namespace Katuusagi.ILPostProcessorCommon.Editor
                 return 0;
             }
 
-            int hash = obj.Name.GetHashCode();
+            int hash = 0;
+            if (obj is GenericInstanceMethod go)
+            {
+                foreach (var genArg in go.GenericArguments)
+                {
+                    hash ^= genArg.GetHashCode_();
+                }
+            }
+
+            hash ^= obj.Name.GetHashCode();
+            hash ^= obj.DeclaringType.GetHashCode_();
+
             if (obj.IsGenericDefinition())
             {
                 foreach (var p in obj.Parameters)
                 {
-                    hash ^= p.ParameterType.FullName.GetHashCode();
+                    hash ^= TypeReferenceComparer.SkipGenericMethodOwner.GetHashCode(p.ParameterType);
                 }
 
-                var td = obj.DeclaringType?.GetElementType();
-                hash ^= td.GetHashCode_();
                 hash ^= obj.GenericParameters.Count;
                 return hash;
             }
@@ -101,16 +118,6 @@ namespace Katuusagi.ILPostProcessorCommon.Editor
             foreach (var p in obj.Parameters)
             {
                 hash ^= p.ParameterType.GetHashCode_();
-            }
-
-            hash ^= obj.DeclaringType.GetHashCode_();
-            if (obj is GenericInstanceMethod go)
-            {
-                foreach (var genArg in go.GenericArguments)
-                {
-                    hash ^= genArg.GetHashCode_();
-                }
-                return hash;
             }
 
             return hash;

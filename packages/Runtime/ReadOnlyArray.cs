@@ -26,13 +26,13 @@ namespace Katuusagi.ILPostProcessorCommon
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        IEnumerator<T> IEnumerable<T>.GetEnumerator()
+        public IEnumerator<T> GetEnumerator()
         {
             return ((IEnumerable<T>)_array).GetEnumerator();
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        public IEnumerator GetEnumerator()
+        IEnumerator IEnumerable.GetEnumerator()
         {
             return _array.GetEnumerator();
         }
@@ -72,7 +72,7 @@ namespace Katuusagi.ILPostProcessorCommon
         {
             if (array == null)
             {
-                throw new ArgumentNullException(nameof(array));
+                return null;
             }
 
             var instance = new ReadOnlyArray<T>();
