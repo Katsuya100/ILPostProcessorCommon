@@ -1484,6 +1484,11 @@ namespace Katuusagi.ILPostProcessorCommon.Editor
                     return false;
                 }
 
+                if (!instruction.TryGetPushConstArgumentInstructions(methodRef, 0, out value, instructions))
+                {
+                    return false;
+                }
+
                 if (!instruction.TryGetPushConstArgumentInstructions(methodRef, 1, out value, instructions))
                 {
                     return false;
