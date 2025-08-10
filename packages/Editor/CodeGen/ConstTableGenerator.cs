@@ -148,7 +148,7 @@ namespace Katuusagi.ILPostProcessorCommon.Editor
                     instructions.Add(Instruction.Create(OpCodes.Dup));
                     instructions.Add(ILPPUtils.LoadLiteral(i));
                     instructions.Add(ILPPUtils.LoadLiteral(e));
-                    instructions.Add(ILPPUtils.SetElement(elementType));
+                    instructions.Add(ILPPUtils.SetElement(elementTypeRef));
                     ++i;
                 }
 

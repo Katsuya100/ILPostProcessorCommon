@@ -123,6 +123,36 @@ namespace Katuusagi.ILPostProcessorCommon.Editor
             return assemblyDefinition;
         }
 
+        public static bool IsEnableGenerateIL(this ICompiledAssembly compiledAssembly)
+        {
+            return !compiledAssembly.Defines.Contains("DISABLE_GENERATE_IL");
+        }
+
+        public static ILPostProcessResult GetResult(this ICompiledAssembly compiledAssembly, AssemblyDefinition assembly)
+        {
+            if (!compiledAssembly.IsEnableGenerateIL())
+            {
+                return compiledAssembly.GetNullResult();
+            }
+
+            var pe  = new MemoryStream();
+            var pdb = new MemoryStream();
+            var writeParameter = new WriterParameters()
+            {
+                SymbolWriterProvider = new PortablePdbWriterProvider(),
+                SymbolStream         = pdb,
+                WriteSymbols         = true
+            };
+
+            assembly.Write(pe, writeParameter);
+            return new ILPostProcessResult(new InMemoryAssembly(pe.ToArray(), pdb.ToArray()), Logger.Messages);
+        }
+
+        public static ILPostProcessResult GetNullResult(this ICompiledAssembly compiledAssembly)
+        {
+            return new ILPostProcessResult(null, Logger.Messages);
+        }
+
         public static void ResolveInstructionOpCode(IEnumerable<Instruction> instructions)
         {
             foreach (var instruction in instructions.Reverse())
@@ -254,6 +284,26 @@ namespace Katuusagi.ILPostProcessorCommon.Editor
             return self.CustomAttributes.FirstOrDefault(v => v.AttributeType.FullName == attribute);
         }
 
+        public static bool HasReturn(this MethodReference self)
+        {
+            return self.ReturnType != null && self.ReturnType.FullName != "System.Void";
+        }
+
+        public static bool HasReturn(this Mono.Cecil.CallSite self)
+        {
+            return self.ReturnType != null && self.ReturnType.FullName != "System.Void";
+        }
+
+        public static ParameterDefinition GetParameter(this MethodReference self, string name)
+        {
+            return self.Parameters.FirstOrDefault(v => v.Name == name);
+        }
+
+        public static ParameterDefinition GetParameterWithAttribute(this MethodReference self, string attribute)
+        {
+            return self.Parameters.FirstOrDefault(v => v.HasAttribute(attribute));
+        }
+
         public static bool IsShortSize(Instruction l, Instruction r)
         {
             var diff = CalcOffsetDiff(l, r);
@@ -287,51 +337,6 @@ namespace Katuusagi.ILPostProcessorCommon.Editor
             }
 
             return size;
-        }
-
-        public static Instruction SetElement(Type elementType)
-        {
-            if (elementType.IsEnum)
-            {
-                elementType = Enum.GetUnderlyingType(elementType);
-            }
-
-            if (elementType == typeof(bool) ||
-                elementType == typeof(sbyte) ||
-                elementType == typeof(byte))
-            {
-                return Instruction.Create(OpCodes.Stelem_I1);
-            }
-            if (elementType == typeof(short) ||
-                elementType == typeof(ushort) ||
-                elementType == typeof(char))
-            {
-                return Instruction.Create(OpCodes.Stelem_I2);
-            }
-            if (elementType == typeof(int) ||
-                elementType == typeof(uint))
-            {
-                return Instruction.Create(OpCodes.Stelem_I4);
-            }
-            if (elementType == typeof(long) ||
-                elementType == typeof(ulong))
-            {
-                return Instruction.Create(OpCodes.Stelem_I8);
-            }
-            if (elementType == typeof(float))
-            {
-                return Instruction.Create(OpCodes.Stelem_R4);
-            }
-            if (elementType == typeof(double))
-            {
-                return Instruction.Create(OpCodes.Stelem_R8);
-            }
-            if (!elementType.IsValueType)
-            {
-                return Instruction.Create(OpCodes.Stelem_Ref);
-            }
-
-            return null;
         }
 
         public static Instruction LoadLiteral(object literalValue)
@@ -482,6 +487,132 @@ namespace Katuusagi.ILPostProcessorCommon.Editor
 
             return null;
         }
+
+        public static Instruction LoadElement(TypeReference elementType)
+        {
+            var typeDef = elementType.Resolve();
+            if (typeDef.IsEnum)
+            {
+                elementType = typeDef.GetEnumUnderlyingType();
+            }
+
+            var name = elementType.FullName;
+            if (elementType.IsPointer ||
+                name == "System.IntPtr" ||
+                name == "System.UIntPtr")
+            {
+                return Instruction.Create(OpCodes.Ldelem_I);
+            }
+
+            if (name == "System.Boolean" ||
+                name == "System.SByte" ||
+                name == "System.Byte")
+            {
+                return Instruction.Create(OpCodes.Ldelem_I1);
+            }
+
+            if (name == "System.Int16" ||
+                name == "System.UInt16" ||
+                name == "System.Char")
+            {
+                return Instruction.Create(OpCodes.Ldelem_I2);
+            }
+
+            if (name == "System.Int32" ||
+                name == "System.UInt32")
+            {
+                return Instruction.Create(OpCodes.Ldelem_I4);
+            }
+
+            if (name == "System.Int64" ||
+                name == "System.UInt64")
+            {
+                return Instruction.Create(OpCodes.Ldelem_I8);
+            }
+
+            if (name == "System.Single")
+            {
+                return Instruction.Create(OpCodes.Ldelem_R4);
+            }
+
+            if (name == "System.Double")
+            {
+                return Instruction.Create(OpCodes.Ldelem_R8);
+            }
+
+            if (!typeDef.IsValueType)
+            {
+                return Instruction.Create(OpCodes.Ldelem_Ref);
+            }
+
+            return Instruction.Create(OpCodes.Ldelem_Any, elementType);
+        }
+
+        public static Instruction LoadElementAddress(TypeReference elementType)
+        {
+            return Instruction.Create(OpCodes.Ldelema, elementType);
+        }
+
+        public static Instruction SetElement(TypeReference elementType)
+        {
+            var typeDef = elementType.Resolve();
+            if (typeDef.IsEnum)
+            {
+                elementType = typeDef.GetEnumUnderlyingType();
+            }
+
+            var name = elementType.FullName;
+            if (elementType.IsPointer ||
+                name == "System.IntPtr" ||
+                name == "System.UIntPtr")
+            {
+                return Instruction.Create(OpCodes.Stelem_I);
+            }
+
+            if (name == "System.Boolean" ||
+                name == "System.SByte" ||
+                name == "System.Byte")
+            {
+                return Instruction.Create(OpCodes.Stelem_I1);
+            }
+
+            if (name == "System.Int16" ||
+                name == "System.UInt16" ||
+                name == "System.Char")
+            {
+                return Instruction.Create(OpCodes.Stelem_I2);
+            }
+
+            if (name == "System.Int32" ||
+                name == "System.UInt32")
+            {
+                return Instruction.Create(OpCodes.Stelem_I4);
+            }
+
+            if (name == "System.Int64" ||
+                name == "System.UInt64")
+            {
+                return Instruction.Create(OpCodes.Stelem_I8);
+            }
+
+            if (name == "System.Single")
+            {
+                return Instruction.Create(OpCodes.Stelem_R4);
+            }
+
+            if (name == "System.Double")
+            {
+                return Instruction.Create(OpCodes.Stelem_R8);
+            }
+
+            if (!typeDef.IsValueType)
+            {
+                return Instruction.Create(OpCodes.Stelem_Ref);
+            }
+
+            return Instruction.Create(OpCodes.Stelem_Any, elementType);
+        }
+
         public static Instruction LoadArgument(ParameterDefinition parameter)
         {
             switch (parameter.Index)
@@ -576,6 +707,123 @@ namespace Katuusagi.ILPostProcessorCommon.Editor
             }
 
             return Instruction.Create(OpCodes.Stloc, variable);
+        }
+
+
+        public static int GetLoadArgumentIndex(Instruction instruction)
+        {
+            var loadArg = instruction.OpCode;
+            if (loadArg == OpCodes.Ldarg_0)
+            {
+                return 0;
+            }
+
+            if (loadArg == OpCodes.Ldarg_1)
+            {
+                return 1;
+            }
+
+            if (loadArg == OpCodes.Ldarg_2)
+            {
+                return 2;
+            }
+
+            if (loadArg == OpCodes.Ldarg_3)
+            {
+                return 3;
+            }
+
+            if (loadArg == OpCodes.Ldarg_S ||
+                loadArg == OpCodes.Ldarga_S ||
+                loadArg == OpCodes.Ldarg ||
+                loadArg == OpCodes.Ldarga)
+            {
+                var parameter = (ParameterDefinition)instruction.Operand;
+                return parameter.Index;
+            }
+
+            return -1;
+        }
+
+        public static int GetSetArgumentIndex(Instruction instruction)
+        {
+            var setArg = instruction.OpCode;
+            if (setArg == OpCodes.Starg_S ||
+                setArg == OpCodes.Starg)
+            {
+                var parameter = (ParameterDefinition)instruction.Operand;
+                return parameter.Index;
+            }
+
+            return -1;
+        }
+
+        public static int GetLoadLocalIndex(Instruction instruction)
+        {
+            var loadLocal = instruction.OpCode;
+            if (loadLocal == OpCodes.Ldloc_0)
+            {
+                return 0;
+            }
+
+            if (loadLocal == OpCodes.Ldloc_1)
+            {
+                return 1;
+            }
+
+            if (loadLocal == OpCodes.Ldloc_2)
+            {
+                return 2;
+            }
+
+            if (loadLocal == OpCodes.Ldloc_3)
+            {
+                return 3;
+            }
+
+            if (loadLocal == OpCodes.Ldloc_S ||
+                loadLocal == OpCodes.Ldloca_S ||
+                loadLocal == OpCodes.Ldloc ||
+                loadLocal == OpCodes.Ldloca)
+            {
+                var variable = (VariableDefinition)instruction.Operand;
+                return variable.Index;
+            }
+
+            return -1;
+        }
+
+        public static int GetSetLocalIndex(Instruction instruction)
+        {
+            var setLocal = instruction.OpCode;
+            if (setLocal == OpCodes.Stloc_0)
+            {
+                return 0;
+            }
+
+            if (setLocal == OpCodes.Stloc_1)
+            {
+                return 1;
+            }
+
+            if (setLocal == OpCodes.Stloc_2)
+            {
+                return 2;
+            }
+
+            if (setLocal == OpCodes.Stloc_3)
+            {
+                return 3;
+            }
+
+            if (setLocal == OpCodes.Stloc_S ||
+                setLocal == OpCodes.Stloc)
+            {
+                var variable = (VariableDefinition)instruction.Operand;
+                return variable.Index;
+            }
+
+            return -1;
         }
 
         public static bool TryCast(Type type, object value, out object result)
@@ -896,9 +1144,9 @@ namespace Katuusagi.ILPostProcessorCommon.Editor
             return false;
         }
 
-        public static bool TryGetConstValue<T>(this Instruction instruction, out T value, List<Instruction> instructions = null)
+        public static bool TryGetConstValue<T>(this Instruction instruction, MethodReference method, out T value, List<Instruction> instructions = null)
         {
-            if (instruction.TryGetConstValue(typeof(T), out object r, instructions) &&
+            if (instruction.TryGetConstValue(method, typeof(T), out object r, instructions) &&
                 r is T resultValue)
             {
                 value = resultValue;
@@ -909,9 +1157,9 @@ namespace Katuusagi.ILPostProcessorCommon.Editor
             return false;
         }
 
-        public static bool TryGetConstValue(this Instruction instruction, Type type, out object value, List<Instruction> instructions = null)
+        public static bool TryGetConstValue(this Instruction instruction, MethodReference method, Type type, out object value, List<Instruction> instructions = null)
         {
-            if (!instruction.TryGetConstValue(out value, instructions))
+            if (!instruction.TryGetConstValue(method, out value, instructions))
             {
                 return false;
             }
@@ -919,7 +1167,7 @@ namespace Katuusagi.ILPostProcessorCommon.Editor
             return TryCast(type, value, out value);
         }
 
-        public static bool TryGetConstValue(this Instruction instruction, out object value, List<Instruction> instructions = null)
+        public static bool TryGetConstValue(this Instruction instruction, MethodReference methodRef, out object value, List<Instruction> instructions = null)
         {
             var opCode = instruction.OpCode;
             var operand = instruction.Operand;
@@ -1061,15 +1309,29 @@ namespace Katuusagi.ILPostProcessorCommon.Editor
                 return true;
             }
 
+            if (opCode == OpCodes.Ldftn)
+            {
+                if (operand is MethodReference method &&
+                    method.IsStatic())
+                {
+                    instructions?.Add(instruction);
+                    value = operand;
+                    return true;
+                }
+
+                value = null;
+                return false;
+            }
+
             if (opCode == OpCodes.Conv_I1)
             {
-                if (!instruction.TryGetStackPushedInstruction(-1, out var prev))
+                if (!instruction.TryGetStackPushedInstruction(methodRef, -1, out var prev))
                 {
                     value = null;
                     return false;
                 }
 
-                if (!prev.TryGetConstValue(out value, instructions))
+                if (!prev.TryGetConstValue(methodRef, out value, instructions))
                 {
                     return false;
                 }
@@ -1100,13 +1362,13 @@ namespace Katuusagi.ILPostProcessorCommon.Editor
 
             if (opCode == OpCodes.Conv_I2)
             {
-                if (!instruction.TryGetStackPushedInstruction(-1, out var prev))
+                if (!instruction.TryGetStackPushedInstruction(methodRef, -1, out var prev))
                 {
                     value = null;
                     return false;
                 }
 
-                if (!prev.TryGetConstValue(out value, instructions))
+                if (!prev.TryGetConstValue(methodRef, out value, instructions))
                 {
                     return false;
                 }
@@ -1137,13 +1399,13 @@ namespace Katuusagi.ILPostProcessorCommon.Editor
 
             if (opCode == OpCodes.Conv_I4)
             {
-                if (!instruction.TryGetStackPushedInstruction(-1, out var prev))
+                if (!instruction.TryGetStackPushedInstruction(methodRef, -1, out var prev))
                 {
                     value = null;
                     return false;
                 }
 
-                if (!prev.TryGetConstValue(out value, instructions))
+                if (!prev.TryGetConstValue(methodRef, out value, instructions))
                 {
                     return false;
                 }
@@ -1174,13 +1436,13 @@ namespace Katuusagi.ILPostProcessorCommon.Editor
 
             if (opCode == OpCodes.Conv_I8)
             {
-                if (!instruction.TryGetStackPushedInstruction(-1, out var prev))
+                if (!instruction.TryGetStackPushedInstruction(methodRef, -1, out var prev))
                 {
                     value = null;
                     return false;
                 }
 
-                if (!prev.TryGetConstValue(out value, instructions))
+                if (!prev.TryGetConstValue(methodRef, out value, instructions))
                 {
                     return false;
                 }
@@ -1208,16 +1470,38 @@ namespace Katuusagi.ILPostProcessorCommon.Editor
                 }
                 return true;
             }
+            
 
-            if (opCode == OpCodes.Box)
+            if (opCode == OpCodes.Newobj)
             {
-                if (!instruction.TryGetStackPushedInstruction(-1, out var prev))
+                var method = instruction.Operand as MethodReference;
+                if (!method.DeclaringType.IsDelegate() ||
+                    method.Parameters.Count != 2 ||
+                    method.Parameters[0].ParameterType.FullName != "System.Object" ||
+                    method.Parameters[1].ParameterType.FullName != "System.IntPtr")
                 {
                     value = null;
                     return false;
                 }
 
-                if (!prev.TryGetConstValue(out value, instructions))
+                if (!instruction.TryGetPushConstArgumentInstructions(methodRef, 1, out value, instructions))
+                {
+                    return false;
+                }
+
+                instructions?.Add(instruction);
+                return true;
+            }
+
+            if (opCode == OpCodes.Box)
+            {
+                if (!instruction.TryGetStackPushedInstruction(methodRef, -1, out var prev))
+                {
+                    value = null;
+                    return false;
+                }
+
+                if (!prev.TryGetConstValue(methodRef, out value, instructions))
                 {
                     return false;
                 }
@@ -1235,7 +1519,7 @@ namespace Katuusagi.ILPostProcessorCommon.Editor
                     return false;
                 }
 
-                if (!instruction.TryGetPushConstArgumentInstructions(0, out value, instructions))
+                if (!instruction.TryGetPushConstArgumentInstructions(methodRef, 0, out value, instructions))
                 {
                     return false;
                 }
@@ -1261,124 +1545,6 @@ namespace Katuusagi.ILPostProcessorCommon.Editor
 
             value = null;
             return false;
-        }
-
-        public static VariableDefinition GetVariableFromStloc(Instruction stloc, MethodBody body)
-        {
-            var opCode = stloc.OpCode;
-            int index;
-            if (opCode == OpCodes.Stloc_0)
-            {
-                index = 0;
-            }
-            else if (opCode == OpCodes.Stloc_1)
-            {
-                index = 1;
-            }
-            else if (opCode == OpCodes.Stloc_2)
-            {
-                index = 2;
-            }
-            else if (opCode == OpCodes.Stloc_3)
-            {
-                index = 3;
-            }
-            else if (opCode == OpCodes.Stloc_S)
-            {
-                index = (short)stloc.Operand;
-            }
-            else if (opCode == OpCodes.Stloc)
-            {
-                index = (int)stloc.Operand;
-            }
-            else
-            {
-                return null;
-            }
-
-            return body.Variables[index];
-        }
-
-        public static VariableDefinition GetVariableFromLdloc(Instruction ldloc, MethodBody body)
-        {
-            var opCode = ldloc.OpCode;
-            int index;
-            if (opCode == OpCodes.Ldloc_0)
-            {
-                index = 0;
-            }
-            else if (opCode == OpCodes.Ldloc_1)
-            {
-                index = 1;
-            }
-            else if (opCode == OpCodes.Ldloc_2)
-            {
-                index = 2;
-            }
-            else if (opCode == OpCodes.Ldloc_3)
-            {
-                index = 3;
-            }
-            else if (opCode == OpCodes.Ldloc_S ||
-                     opCode == OpCodes.Ldloca_S ||
-                     opCode == OpCodes.Ldloc ||
-                     opCode == OpCodes.Ldloca)
-            {
-                return ldloc.Operand as VariableDefinition;
-            }
-            else
-            {
-                return null;
-            }
-
-            return body.Variables[index];
-        }
-
-        public static ParameterDefinition GetArgumentFromStarg(Instruction starg)
-        {
-            var opCode = starg.OpCode;
-            if (opCode == OpCodes.Starg_S ||
-                opCode == OpCodes.Starg)
-            {
-                return starg.Operand as ParameterDefinition;
-            }
-
-            return null;
-        }
-
-        public static ParameterDefinition GetArgumentFromLdarg(Instruction ldarg, MethodDefinition method)
-        {
-            var opCode = ldarg.OpCode;
-            int index;
-            if (opCode == OpCodes.Ldarg_0)
-            {
-                index = 0;
-            }
-            else if (opCode == OpCodes.Ldarg_1)
-            {
-                index = 1;
-            }
-            else if (opCode == OpCodes.Ldarg_2)
-            {
-                index = 2;
-            }
-            else if (opCode == OpCodes.Ldarg_3)
-            {
-                index = 3;
-            }
-            else if (opCode == OpCodes.Ldarg_S ||
-                     opCode == OpCodes.Ldarga_S ||
-                     opCode == OpCodes.Ldarg ||
-                     opCode == OpCodes.Ldarga)
-            {
-                return ldarg.Operand as ParameterDefinition;
-            }
-            else
-            {
-                return null;
-            }
-
-            return method.Parameters[index];
         }
 
         public static IEnumerable<System.Reflection.MethodInfo> FindMethods<T>(System.Reflection.Assembly assembly)
@@ -1559,6 +1725,24 @@ namespace Katuusagi.ILPostProcessorCommon.Editor
             }
 
             return false;
+        }
+
+        public static bool IsDelegate(this TypeReference typeRef)
+        {
+            if (typeRef == null)
+            {
+                return false;
+            }
+
+            var typeDef = typeRef.Resolve();
+            if (typeDef == null)
+            {
+                return false;
+            }
+
+            var baseType = typeDef.BaseType?.FullName ?? string.Empty;
+            return baseType == "System.MulticastDelegate" ||
+                   baseType == "System.Delegate";
         }
 
         public static string GetTypeName(Type type)
@@ -2711,223 +2895,237 @@ namespace Katuusagi.ILPostProcessorCommon.Editor
             return opCode;
         }
 
-        public static bool TryGetConstArgument(this Instruction call, string name, out object result)
+        public static bool TryGetConstArgument(this Instruction call, MethodReference method, string name, out object result)
         {
-            if (!call.TryGetPushArgumentInstruction(name, out var instruction))
+            if (!call.TryGetPushArgumentInstruction(method, name, out var instruction))
             {
                 result = null;
                 return false;
             }
 
-            return instruction.TryGetConstValue(out result);
+            return instruction.TryGetConstValue(method, out result);
         }
 
-        public static bool TryGetConstArgument(this Instruction call, int argNumber, out object result)
+        public static bool TryGetConstArgument(this Instruction call, MethodReference method, int argNumber, out object result)
         {
-            if (!call.TryGetPushArgumentInstruction(argNumber, out var instruction))
+            if (!call.TryGetPushArgumentInstruction(method, argNumber, out var instruction))
             {
                 result = null;
                 return false;
             }
 
-            return instruction.TryGetConstValue(out result);
+            return instruction.TryGetConstValue(method, out result);
         }
 
-        public static bool TryGetConstArgument(this Instruction call, Type type, string name, out object result)
+        public static bool TryGetConstArgument(this Instruction call, MethodReference method, Type type, string name, out object result)
         {
-            if (!call.TryGetPushArgumentInstruction(name, out var instruction))
+            if (!call.TryGetPushArgumentInstruction(method, name, out var instruction))
             {
                 result = default;
                 return false;
             }
 
-            return instruction.TryGetConstValue(type, out result);
+            return instruction.TryGetConstValue(method, type, out result);
         }
 
-        public static bool TryGetConstArgument(this Instruction call, Type type, int argNumber, out object result)
+        public static bool TryGetConstArgument(this Instruction call, MethodReference method, Type type, int argNumber, out object result)
         {
-            if (!call.TryGetPushArgumentInstruction(argNumber, out var instruction))
+            if (!call.TryGetPushArgumentInstruction(method, argNumber, out var instruction))
             {
                 result = default;
                 return false;
             }
 
-            return instruction.TryGetConstValue(type, out result);
+            return instruction.TryGetConstValue(method, type, out result);
         }
 
-        public static bool TryGetConstArgument<T>(this Instruction call, string name, out T result)
+        public static bool TryGetConstArgument<T>(this Instruction call, MethodReference method, string name, out T result)
         {
-            if (!call.TryGetPushArgumentInstruction(name, out var instruction))
+            if (!call.TryGetPushArgumentInstruction(method, name, out var instruction))
             {
                 result = default;
                 return false;
             }
 
-            return instruction.TryGetConstValue(out result);
+            return instruction.TryGetConstValue(method, out result);
         }
 
-        public static bool TryGetConstArgument<T>(this Instruction call, int argNumber, out T result)
+        public static bool TryGetConstArgument<T>(this Instruction call, MethodReference method, int argNumber, out T result)
         {
-            if (!call.TryGetPushArgumentInstruction(argNumber, out var instruction))
+            if (!call.TryGetPushArgumentInstruction(method, argNumber, out var instruction))
             {
                 result = default;
                 return false;
             }
 
-            return instruction.TryGetConstValue(out result);
+            return instruction.TryGetConstValue(method, out result);
         }
 
-        public static bool TryGetPushConstArgumentInstruction(this Instruction call, string name, out object value, out Instruction instruction)
+        public static bool TryGetPushConstArgumentInstruction(this Instruction call, MethodReference method, string name, out object value, out Instruction instruction)
         {
-            if (!call.TryGetPushArgumentInstruction(name, out instruction))
+            if (!call.TryGetPushArgumentInstruction(method, name, out instruction))
             {
                 value = null;
                 return false;
             }
 
-            return instruction.TryGetConstValue(out value);
+            return instruction.TryGetConstValue(method, out value);
         }
 
-        public static bool TryGetPushConstArgumentInstruction(this Instruction call, int argNumber, out object value, out Instruction instruction)
+        public static bool TryGetPushConstArgumentInstruction(this Instruction call, MethodReference method, int argNumber, out object value, out Instruction instruction)
         {
-            if (!call.TryGetPushArgumentInstruction(argNumber, out instruction))
+            if (!call.TryGetPushArgumentInstruction(method, argNumber, out instruction))
             {
                 value = null;
                 return false;
             }
 
-            return instruction.TryGetConstValue(out value);
+            return instruction.TryGetConstValue(method, out value);
         }
 
-        public static bool TryGetPushConstArgumentInstruction(this Instruction call, Type type, string name, out object value, out Instruction instruction)
+        public static bool TryGetPushConstArgumentInstruction(this Instruction call, MethodReference method, Type type, string name, out object value, out Instruction instruction)
         {
-            if (!call.TryGetPushArgumentInstruction(name, out instruction))
+            if (!call.TryGetPushArgumentInstruction(method, name, out instruction))
             {
                 value = null;
                 return false;
             }
 
-            return instruction.TryGetConstValue(type, out value);
+            return instruction.TryGetConstValue(method, type, out value);
         }
 
-        public static bool TryGetPushConstArgumentInstruction(this Instruction call, Type type, int argNumber, out object value, out Instruction instruction)
+        public static bool TryGetPushConstArgumentInstruction(this Instruction call, MethodReference method, Type type, int argNumber, out object value, out Instruction instruction)
         {
-            if (!call.TryGetPushArgumentInstruction(argNumber, out instruction))
+            if (!call.TryGetPushArgumentInstruction(method, argNumber, out instruction))
             {
                 value = null;
                 return false;
             }
 
-            return instruction.TryGetConstValue(type, out value);
+            return instruction.TryGetConstValue(method, type, out value);
         }
 
-        public static bool TryGetPushConstArgumentInstruction<T>(this Instruction call, string name, out T value, out Instruction instruction)
+        public static bool TryGetPushConstArgumentInstruction<T>(this Instruction call, MethodReference method, string name, out T value, out Instruction instruction)
         {
-            if (!call.TryGetPushArgumentInstruction(name, out instruction))
+            if (!call.TryGetPushArgumentInstruction(method, name, out instruction))
             {
                 value = default;
                 return false;
             }
 
-            return instruction.TryGetConstValue(out value);
+            return instruction.TryGetConstValue(method, out value);
         }
 
-        public static bool TryGetPushConstArgumentInstruction<T>(this Instruction call, int argNumber, out T value, out Instruction instruction)
+        public static bool TryGetPushConstArgumentInstruction<T>(this Instruction call, MethodReference method, int argNumber, out T value, out Instruction instruction)
         {
-            if (!call.TryGetPushArgumentInstruction(argNumber, out instruction))
+            if (!call.TryGetPushArgumentInstruction(method, argNumber, out instruction))
             {
                 value = default;
                 return false;
             }
 
-            return instruction.TryGetConstValue(out value);
+            return instruction.TryGetConstValue(method, out value);
         }
 
-        public static bool TryGetPushConstArgumentInstructions(this Instruction call, string name, out object value, List<Instruction> instructions)
+        public static bool TryGetPushConstArgumentInstructions(this Instruction call, MethodReference method, string name, out object value, List<Instruction> instructions)
         {
-            if (!call.TryGetPushArgumentInstruction(name, out var instruction))
+            if (!call.TryGetPushArgumentInstruction(method, name, out var instruction))
             {
                 value = null;
                 return false;
             }
 
-            return instruction.TryGetConstValue(out value, instructions);
+            return instruction.TryGetConstValue(method, out value, instructions);
         }
 
-        public static bool TryGetPushConstArgumentInstructions(this Instruction call, int argNumber, out object value, List<Instruction> instructions)
+        public static bool TryGetPushConstArgumentInstructions(this Instruction call, MethodReference method, int argNumber, out object value, List<Instruction> instructions)
         {
-            if (!call.TryGetPushArgumentInstruction(argNumber, out var instruction))
+            if (!call.TryGetPushArgumentInstruction(method, argNumber, out var instruction))
             {
                 value = null;
                 return false;
             }
 
-            return instruction.TryGetConstValue(out value, instructions);
+            return instruction.TryGetConstValue(method, out value, instructions);
         }
 
-        public static bool TryGetPushConstArgumentInstructions(this Instruction call, Type type, string name, out object value, List<Instruction> instructions)
+        public static bool TryGetPushConstArgumentInstructions(this Instruction call, MethodReference method, Type type, string name, out object value, List<Instruction> instructions)
         {
-            if (!call.TryGetPushArgumentInstruction(name, out var instruction))
+            if (!call.TryGetPushArgumentInstruction(method, name, out var instruction))
             {
                 value = null;
                 return false;
             }
 
-            return instruction.TryGetConstValue(type, out value, instructions);
+            return instruction.TryGetConstValue(method, type, out value, instructions);
         }
 
-        public static bool TryGetPushConstArgumentInstructions(this Instruction call, Type type, int argNumber, out object value, List<Instruction> instructions)
+        public static bool TryGetPushConstArgumentInstructions(this Instruction call, MethodReference method, Type type, int argNumber, out object value, List<Instruction> instructions)
         {
-            if (!call.TryGetPushArgumentInstruction(argNumber, out var instruction))
+            if (!call.TryGetPushArgumentInstruction(method, argNumber, out var instruction))
             {
                 value = null;
                 return false;
             }
 
-            return instruction.TryGetConstValue(type, out value, instructions);
+            return instruction.TryGetConstValue(method, type, out value, instructions);
         }
 
-        public static bool TryGetPushConstArgumentInstructions<T>(this Instruction call, string name, out T value, List<Instruction> instructions)
+        public static bool TryGetPushConstArgumentInstructions<T>(this Instruction call, MethodReference method, string name, out T value, List<Instruction> instructions)
         {
-            if (!call.TryGetPushArgumentInstruction(name, out var instruction))
+            if (!call.TryGetPushArgumentInstruction(method, name, out var instruction))
             {
                 value = default;
                 return false;
             }
 
-            return instruction.TryGetConstValue(out value, instructions);
+            return instruction.TryGetConstValue(method, out value, instructions);
         }
 
-        public static bool TryGetPushConstArgumentInstructions<T>(this Instruction call, int argNumber, out T value, List<Instruction> instructions)
+        public static bool TryGetPushConstArgumentInstructions<T>(this Instruction call, MethodReference method, int argNumber, out T value, List<Instruction> instructions)
         {
-            if (!call.TryGetPushArgumentInstruction(argNumber, out var instruction))
+            if (!call.TryGetPushArgumentInstruction(method, argNumber, out var instruction))
             {
                 value = default;
                 return false;
             }
 
-            return instruction.TryGetConstValue(out value, instructions);
+            return instruction.TryGetConstValue(method, out value, instructions);
         }
 
-        public static bool TryGetPushArgumentInstruction(this Instruction call, string argName, out Instruction arg)
+        public static bool TryGetPushArgumentInstruction(this Instruction call, MethodReference methodRef, string argName, out Instruction arg)
         {
             arg = null;
-            if (call.OpCode != OpCodes.Call &&
-                call.OpCode != OpCodes.Callvirt)
+            Mono.Collections.Generic.Collection <ParameterDefinition> parameters;
+            if (call.OpCode == OpCodes.Call ||
+                call.OpCode == OpCodes.Callvirt ||
+                call.OpCode == OpCodes.Newobj)
+            {
+                if (!(call.Operand is MethodReference method))
+                {
+                    return false;
+                }
+
+                parameters = method.Resolve().Parameters;
+            }
+            else if (call.OpCode == OpCodes.Calli)
+            {
+                if (!(call.Operand is Mono.Cecil.CallSite callSite))
+                {
+                    return false;
+                }
+
+                parameters = callSite.Parameters;
+            }
+            else
             {
                 return false;
             }
 
-            if (!(call.Operand is MethodReference method))
-            {
-                return false;
-            }
-
-            var methodDef = method.Resolve();
             try
             {
-                var argNumber = methodDef.Parameters.Select((v, i) => (v, i)).First(v => v.v.Name == argName).i;
-                return TryGetStackPushedInstruction(call, argNumber - method.Parameters.Count, out arg);
+                var argNumber = parameters.Select((v, i) => (v, i)).First(v => v.v.Name == argName).i;
+                return TryGetStackPushedInstruction(call, methodRef, argNumber - parameters.Count, out arg);
             }
             catch
             {
@@ -2935,28 +3133,43 @@ namespace Katuusagi.ILPostProcessorCommon.Editor
             }
         }
 
-        public static bool TryGetPushArgumentInstruction(this Instruction call, int argNumber, out Instruction arg)
+        public static bool TryGetPushArgumentInstruction(this Instruction call, MethodReference methodRef, int argNumber, out Instruction arg)
         {
             arg = null;
-            if (call.OpCode != OpCodes.Call &&
-                call.OpCode != OpCodes.Callvirt)
+            Mono.Collections.Generic.Collection <ParameterDefinition> parameters;
+            if (call.OpCode == OpCodes.Call ||
+                call.OpCode == OpCodes.Callvirt ||
+                call.OpCode == OpCodes.Newobj)
+            {
+                if (!(call.Operand is MethodReference method))
+                {
+                    return false;
+                }
+
+                parameters = method.Resolve().Parameters;
+            }
+            else if (call.OpCode == OpCodes.Calli)
+            {
+                if (!(call.Operand is Mono.Cecil.CallSite callSite))
+                {
+                    return false;
+                }
+
+                parameters = callSite.Parameters;
+            }
+            else
             {
                 return false;
             }
 
-            if (!(call.Operand is MethodReference method))
-            {
-                return false;
-            }
-
-            return TryGetStackPushedInstruction(call, argNumber - method.Parameters.Count, out arg);
+            return call.TryGetStackPushedInstruction(methodRef, argNumber - parameters.Count, out arg);
         }
 
-        public static bool TryGetStackPushedInstruction(this Instruction call, int targetRelativeStackCount, out Instruction result)
+        public static bool TryGetStackPushedInstruction(this Instruction call, MethodReference method, int targetRelativeStackCount, out Instruction result)
         {
             result = null;
             var stackCount = 0;
-            var instruction = GetPrev(call);
+            var instruction = call.GetPrev();
             while (instruction != null)
             {
                 var pushCount = instruction.GetPushCount();
@@ -2968,7 +3181,7 @@ namespace Katuusagi.ILPostProcessorCommon.Editor
                     return true;
                 }
 
-                var popCount = instruction.GetPopCount();
+                var popCount = instruction.GetPopCount(method);
                 if (popCount == -1)
                 {
                     return false;
@@ -3015,18 +3228,45 @@ namespace Katuusagi.ILPostProcessorCommon.Editor
             if (instruction.OpCode == OpCodes.Call || instruction.OpCode == OpCodes.Callvirt)
             {
                 var method = instruction.Operand as MethodReference;
-                return method.ReturnType.FullName == "System.Void" ? 0 : 1;
+                return method.HasReturn() ? 1 : 0;
+            }
+
+            if (instruction.OpCode == OpCodes.Calli)
+            {
+                var callSite = instruction.Operand as Mono.Cecil.CallSite;
+                return callSite.HasReturn() ? 1 : 0;
             }
 
             return instruction.OpCode.GetPushCount();
         }
 
-        public static int GetPopCount(this Instruction instruction)
+        public static int GetPopCount(this Instruction instruction, MethodReference methodRef)
         {
             if (instruction.OpCode == OpCodes.Call || instruction.OpCode == OpCodes.Callvirt)
             {
                 var method = instruction.Operand as MethodReference;
+                if (method.IsStatic())
+                {
+                    return method.Parameters.Count;
+                }
+                return method.Parameters.Count + 1;
+            }
+
+            if (instruction.OpCode == OpCodes.Calli)
+            {
+                var callSite = instruction.Operand as Mono.Cecil.CallSite;
+                return callSite.Parameters.Count + 1;
+            }
+
+            if (instruction.OpCode == OpCodes.Newobj)
+            {
+                var method = instruction.Operand as MethodReference;
                 return method.Parameters.Count;
+            }
+
+            if (instruction.OpCode == OpCodes.Ret)
+            {
+                return methodRef.HasReturn() ? 1 : 0;
             }
 
             return instruction.OpCode.GetPopCount();
@@ -3037,6 +3277,7 @@ namespace Katuusagi.ILPostProcessorCommon.Editor
             switch (opCode.StackBehaviourPush)
             {
                 case StackBehaviour.Push0:
+                case StackBehaviour.Varpush:
                     return 0;
                 case StackBehaviour.Push1:
                 case StackBehaviour.Pushi:
@@ -3056,6 +3297,7 @@ namespace Katuusagi.ILPostProcessorCommon.Editor
             switch (opCode.StackBehaviourPop)
             {
                 case StackBehaviour.Pop0:
+                case StackBehaviour.Varpop:
                     return 0;
                 case StackBehaviour.Pop1:
                 case StackBehaviour.Popi:
