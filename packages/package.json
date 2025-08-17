@@ -2,7 +2,7 @@
     "name": "com.katuusagi.ilpostprocessorcommon",
     "displayName": "ILPostProcessorCommon",
     "description": "Useful features for using ILPostProcessor.",
-    "version": "2.4.1",
+    "version": "2.4.2",
     "unity": "6000.0",
     "dependencies": {
         "com.unity.nuget.mono-cecil": "1.11.4"
@@ -17,5 +17,5 @@
     },
     "documentationUrl": "https://github.com/Katsuya100/ILPostProcessorCommon",
     "changelogUrl": "https://github.com/Katsuya100/ILPostProcessorCommon/releases",
-    "licensesUrl": "https://github.com/Katsuya100/ILPostProcessorCommon/blob/ver2.4.1/LICENSE"
+    "licensesUrl": "https://github.com/Katsuya100/ILPostProcessorCommon/blob/ver2.4.2/LICENSE"
 }

@@ -3111,7 +3111,16 @@ namespace Katuusagi.ILPostProcessorCommon.Editor
                     return false;
                 }
 
-                parameters = method.Resolve().Parameters;
+                var methodDef = method.Resolve();
+
+                if (methodDef != null)
+                {
+                    parameters = methodDef.Parameters;
+                }
+                else
+                {
+                    parameters = method.Parameters;
+                }
             }
             else if (call.OpCode == OpCodes.Calli)
             {
@@ -3151,7 +3160,15 @@ namespace Katuusagi.ILPostProcessorCommon.Editor
                     return false;
                 }
 
-                parameters = method.Resolve().Parameters;
+                var methodDef = method.Resolve();
+                if (methodDef != null)
+                {
+                    parameters = methodDef.Parameters;
+                }
+                else
+                {
+                    parameters = method.Parameters;
+                }
             }
             else if (call.OpCode == OpCodes.Calli)
             {
