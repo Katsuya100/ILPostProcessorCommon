@@ -12,13 +12,19 @@ namespace Katuusagi.ILPostProcessorCommon.Editor
     {
         private readonly string[] m_AssemblyReferences;
         private readonly Dictionary<string, AssemblyDefinition> m_AssemblyCache = new Dictionary<string, AssemblyDefinition>();
-        private readonly ICompiledAssembly m_CompiledAssembly;
+        private readonly string m_CompiledAssembly;
         private AssemblyDefinition m_SelfAssembly;
 
         public PostProcessorAssemblyResolver(ICompiledAssembly compiledAssembly)
         {
-            m_CompiledAssembly = compiledAssembly;
+            m_CompiledAssembly = compiledAssembly.Name;
             m_AssemblyReferences = compiledAssembly.References;
+        }
+
+        public PostProcessorAssemblyResolver(string assembly, string[] references)
+        {
+            m_CompiledAssembly = assembly;
+            m_AssemblyReferences = references;
         }
 
         public void Dispose() { }
@@ -29,7 +35,7 @@ namespace Katuusagi.ILPostProcessorCommon.Editor
         {
             lock (m_AssemblyCache)
             {
-                if (name.Name == m_CompiledAssembly.Name)
+                if (name.Name == m_CompiledAssembly)
                 {
                     return m_SelfAssembly;
                 }

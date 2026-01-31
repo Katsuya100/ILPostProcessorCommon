@@ -2,10 +2,13 @@ using Mono.Cecil;
 using Mono.Cecil.Cil;
 using Mono.Cecil.Rocks;
 using System;
+using System.Collections;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Runtime.CompilerServices;
+using System.Runtime.InteropServices;
+using System.Threading;
 using Unity.CompilationPipeline.Common.Diagnostics;
 using Unity.CompilationPipeline.Common.ILPostProcessing;
 
@@ -123,16 +126,125 @@ namespace Katuusagi.ILPostProcessorCommon.Editor
             return assemblyDefinition;
         }
 
-        public static bool IsEnableGenerateIL(this ICompiledAssembly compiledAssembly)
+        public static AssemblyDefinition LoadAssemblyDefinition(string assemblyPath, IEnumerable<string> references)
         {
-            return !compiledAssembly.Defines.Contains("DISABLE_GENERATE_IL");
+            while (true)
+            {
+                try
+                {
+                    var resolver = new PostProcessorAssemblyResolver(Path.GetFileNameWithoutExtension(assemblyPath), references.Where(v => v != assemblyPath).ToArray());
+                    var readerParameters = new ReaderParameters()
+                    {
+                        SymbolReaderProvider = new PortablePdbReaderProvider(),
+                        AssemblyResolver = resolver,
+                        ReflectionImporterProvider = new PostProcessorReflectionImporterProvider(),
+                        ReadingMode = ReadingMode.Immediate,
+                        ReadSymbols = true,
+                    };
+
+                    var assemblyDefinition = AssemblyDefinition.ReadAssembly(assemblyPath, readerParameters);
+                    resolver.AddAssemblyDefinitionBeingOperatedOn(assemblyDefinition);
+
+                    return assemblyDefinition;
+                }
+                catch (FileNotFoundException)
+                {
+                    return null;
+                }
+                catch (BadImageFormatException)
+                {
+                    return null;
+                }
+                catch (IOException)
+                {
+                    continue;
+                }
+                catch
+                {
+                    LogError($"assembly load filed.{assemblyPath}");
+                    throw;
+                }
+            }
         }
 
-        public static ILPostProcessResult GetResult(this ICompiledAssembly compiledAssembly, AssemblyDefinition assembly)
+        public static string CopyAssemblySymbols(string parent, string assemblyPath)
         {
-            if (!compiledAssembly.IsEnableGenerateIL())
+            while (true)
             {
-                return compiledAssembly.GetNullResult();
+                try
+                {
+                    var copiedAssemblyDirectoryPath = Path.Combine("Temp/AspectForUnity", parent);
+                    if (!Directory.Exists(copiedAssemblyDirectoryPath))
+                    {
+                        var directoryMutex = new Mutex(false, copiedAssemblyDirectoryPath.Replace("\\", "/").Replace("/", "_"));
+                        directoryMutex.WaitOne();
+                        try
+                        {
+                            Directory.CreateDirectory(copiedAssemblyDirectoryPath);
+                        }
+                        finally
+                        {
+                            directoryMutex.ReleaseMutex();
+                        }
+                    }
+
+                    var copiedAssemblyPath = Path.Combine(copiedAssemblyDirectoryPath, Path.GetFileName(assemblyPath));
+                    var dllMutex = new Mutex(false, copiedAssemblyPath.Replace("\\", "/").Replace("/", "_"));
+                    dllMutex.WaitOne();
+                    try
+                    {
+                        File.Copy(assemblyPath, copiedAssemblyPath, true);
+                    }
+                    finally
+                    {
+                        dllMutex.ReleaseMutex();
+                    }
+
+                    var pdbPath = Path.ChangeExtension(assemblyPath, "pdb");
+                    var copiedPdbPath = Path.ChangeExtension(copiedAssemblyPath, "pdb");
+                    if (File.Exists(pdbPath))
+                    {
+                        var pdbMutex = new Mutex(false, copiedPdbPath.Replace("\\", "/").Replace("/", "_"));
+                        try
+                        {
+                            pdbMutex.WaitOne();
+                            File.Copy(pdbPath, copiedPdbPath, true);
+                        }
+                        finally
+                        {
+                            pdbMutex.ReleaseMutex();
+                        }
+                    }
+
+                    return copiedAssemblyPath;
+                }
+                catch (IOException e)
+                {
+                    ILPPUtils.Log(e);
+                    continue;
+                }
+            }
+        }
+
+        public static bool IsEnableGenerateIL(this ICompiledAssembly self)
+        {
+            if (self == null)
+            {
+                throw new ArgumentNullException(nameof(self));
+            }
+            return !self.Defines.Contains("DISABLE_GENERATE_IL");
+        }
+
+        public static ILPostProcessResult GetResult(this ICompiledAssembly self, AssemblyDefinition assembly)
+        {
+            if (self == null)
+            {
+                throw new ArgumentNullException(nameof(self));
+            }
+
+            if (!self.IsEnableGenerateIL())
+            {
+                return self.GetNullResult();
             }
 
             var pe  = new MemoryStream();
@@ -148,8 +260,12 @@ namespace Katuusagi.ILPostProcessorCommon.Editor
             return new ILPostProcessResult(new InMemoryAssembly(pe.ToArray(), pdb.ToArray()), Logger.Messages);
         }
 
-        public static ILPostProcessResult GetNullResult(this ICompiledAssembly compiledAssembly)
+        public static ILPostProcessResult GetNullResult(this ICompiledAssembly self)
         {
+            if (self == null)
+            {
+                throw new ArgumentNullException(nameof(self));
+            }
             return new ILPostProcessResult(null, Logger.Messages);
         }
 
@@ -228,9 +344,13 @@ namespace Katuusagi.ILPostProcessorCommon.Editor
             }
         }
 
-        public static IEnumerable<Type> GetAllTypes(this IEnumerable<Type> types)
+        public static IEnumerable<Type> GetAllTypes(this IEnumerable<Type> self)
         {
-            foreach (var type in types)
+            if (self == null)
+            {
+                throw new ArgumentNullException(nameof(self));
+            }
+            foreach (var type in self)
             {
                 yield return type;
                 foreach (var nested in type.GetNestedTypes().GetAllTypes())
@@ -240,9 +360,13 @@ namespace Katuusagi.ILPostProcessorCommon.Editor
             }
         }
 
-        public static IEnumerable<TypeDefinition> GetAllTypes(this IEnumerable<TypeDefinition> types)
+        public static IEnumerable<TypeDefinition> GetAllTypes(this IEnumerable<TypeDefinition> self)
         {
-            foreach (var type in types)
+            if (self == null)
+            {
+                throw new ArgumentNullException(nameof(self));
+            }
+            foreach (var type in self)
             {
                 yield return type;
                 foreach (var nested in type.NestedTypes.GetAllTypes())
@@ -255,53 +379,129 @@ namespace Katuusagi.ILPostProcessorCommon.Editor
         public static IEnumerable<T> WhereHasAttribute<T>(this IEnumerable<T> self, TypeReference attribute)
             where T : Mono.Cecil.ICustomAttributeProvider
         {
+            if (self == null)
+            {
+                throw new ArgumentNullException(nameof(self));
+            }
             return self.Where(v => v.HasAttribute(attribute));
         }
 
         public static IEnumerable<T> WhereHasAttribute<T>(this IEnumerable<T> self, string attribute)
             where T : Mono.Cecil.ICustomAttributeProvider
         {
+            if (self == null)
+            {
+                throw new ArgumentNullException(nameof(self));
+            }
             return self.Where(v => v.HasAttribute(attribute));
         }
 
         public static bool HasAttribute(this Mono.Cecil.ICustomAttributeProvider self, TypeReference attribute)
         {
+            if (self == null)
+            {
+                throw new ArgumentNullException(nameof(self));
+            }
             return self.GetAttribute(attribute) != null;
         }
 
         public static bool HasAttribute(this Mono.Cecil.ICustomAttributeProvider self, string attribute)
         {
+            if (self == null)
+            {
+                throw new ArgumentNullException(nameof(self));
+            }
             return self.GetAttribute(attribute) != null;
         }
 
         public static CustomAttribute GetAttribute(this Mono.Cecil.ICustomAttributeProvider self, TypeReference attribute)
         {
+            if (self == null)
+            {
+                throw new ArgumentNullException(nameof(self));
+            }
             return self.CustomAttributes.FirstOrDefault(v => v.AttributeType == attribute);
         }
 
         public static CustomAttribute GetAttribute(this Mono.Cecil.ICustomAttributeProvider self, string attribute)
         {
+            if (self == null)
+            {
+                throw new ArgumentNullException(nameof(self));
+            }
             return self.CustomAttributes.FirstOrDefault(v => v.AttributeType.FullName == attribute);
         }
 
         public static bool HasReturn(this MethodReference self)
         {
+            if (self == null)
+            {
+                throw new ArgumentNullException(nameof(self));
+            }
             return self.ReturnType != null && self.ReturnType.FullName != "System.Void";
         }
 
         public static bool HasReturn(this Mono.Cecil.CallSite self)
         {
+            if (self == null)
+            {
+                throw new ArgumentNullException(nameof(self));
+            }
             return self.ReturnType != null && self.ReturnType.FullName != "System.Void";
         }
 
         public static ParameterDefinition GetParameter(this MethodReference self, string name)
         {
+            if (self == null)
+            {
+                throw new ArgumentNullException(nameof(self));
+            }
             return self.Parameters.FirstOrDefault(v => v.Name == name);
         }
 
         public static ParameterDefinition GetParameterWithAttribute(this MethodReference self, string attribute)
         {
+            if (self == null)
+            {
+                throw new ArgumentNullException(nameof(self));
+            }
             return self.Parameters.FirstOrDefault(v => v.HasAttribute(attribute));
+        }
+
+        public static GenericParameter GetGenericParameter(this MethodReference self, string name)
+        {
+            if (self == null)
+            {
+                throw new ArgumentNullException(nameof(self));
+            }
+            return self.GenericParameters.FirstOrDefault(v => v.Name == name);
+        }
+
+        public static GenericParameter GetGenericParameterWithAttribute(this MethodReference self, string attribute)
+        {
+            if (self == null)
+            {
+                throw new ArgumentNullException(nameof(self));
+            }
+            return self.GenericParameters.FirstOrDefault(v => v.HasAttribute(attribute));
+        }
+
+        public static GenericParameter GetGenericParameter(this TypeReference self, string name)
+        {
+            if (self == null)
+            {
+                throw new ArgumentNullException(nameof(self));
+            }
+            return self.GenericParameters.FirstOrDefault(v => v.Name == name);
+        }
+
+        public static GenericParameter GetGenericParameterWithAttribute(this TypeReference self, string attribute)
+        {
+            if (self == null)
+            {
+                throw new ArgumentNullException(nameof(self));
+            }
+            return self.GenericParameters.FirstOrDefault(v => v.HasAttribute(attribute));
         }
 
         public static bool IsShortSize(Instruction l, Instruction r)
@@ -615,7 +815,18 @@ namespace Katuusagi.ILPostProcessorCommon.Editor
 
         public static Instruction LoadArgument(ParameterDefinition parameter)
         {
-            switch (parameter.Index)
+            if (parameter == null)
+            {
+                throw new ArgumentNullException(nameof(parameter));
+            }
+
+            var number = parameter.Index;
+            if (parameter.Method.HasThis)
+            {
+                ++number;
+            }
+
+            switch (number)
             {
                 case 0:
                     return Instruction.Create(OpCodes.Ldarg_0);
@@ -627,7 +838,7 @@ namespace Katuusagi.ILPostProcessorCommon.Editor
                     return Instruction.Create(OpCodes.Ldarg_3);
             }
 
-            if (parameter.Index < byte.MaxValue)
+            if (number < byte.MaxValue)
             {
                 return Instruction.Create(OpCodes.Ldarg_S, parameter);
             }
@@ -637,12 +848,82 @@ namespace Katuusagi.ILPostProcessorCommon.Editor
 
         public static Instruction LoadArgumentAddress(ParameterDefinition parameter)
         {
+            if (parameter == null)
+            {
+                throw new ArgumentNullException(nameof(parameter));
+            }
+
+            var number = parameter.Index;
+            if (parameter.Method.HasThis)
+            {
+                ++number;
+            }
+
             if (parameter.Index < byte.MaxValue)
             {
                 return Instruction.Create(OpCodes.Ldarga_S, parameter);
             }
 
             return Instruction.Create(OpCodes.Ldarga, parameter);
+        }
+
+        public static Instruction LoadIndirect(TypeReference typeRef)
+        {
+            if (typeRef.IsGenericParameter)
+            {
+                return Instruction.Create(OpCodes.Ldobj, typeRef);
+            }
+
+            switch (typeRef.MetadataType)
+            {
+                case MetadataType.FunctionPointer:
+                case MetadataType.Pointer:
+                case MetadataType.IntPtr:
+                case MetadataType.UIntPtr:
+                case MetadataType.Pinned:
+                    return Instruction.Create(OpCodes.Ldind_I);
+                case MetadataType.SByte:
+                    return Instruction.Create(OpCodes.Ldind_I1);
+                case MetadataType.Boolean:
+                case MetadataType.Byte:
+                    return Instruction.Create(OpCodes.Ldind_U1);
+                case MetadataType.Int16:
+                    return Instruction.Create(OpCodes.Ldind_I2);
+                case MetadataType.UInt16:
+                case MetadataType.Char:
+                    return Instruction.Create(OpCodes.Ldind_U2);
+                case MetadataType.Int32:
+                    return Instruction.Create(OpCodes.Ldind_I4);
+                case MetadataType.UInt32:
+                    return Instruction.Create(OpCodes.Ldind_U4);
+                case MetadataType.Int64:
+                case MetadataType.UInt64:
+                    return Instruction.Create(OpCodes.Ldind_I8);
+                case MetadataType.Single:
+                    return Instruction.Create(OpCodes.Ldind_R4);
+                case MetadataType.Double:
+                    return Instruction.Create(OpCodes.Ldind_R8);
+                case MetadataType.Object:
+                case MetadataType.String:
+                case MetadataType.Class:
+                case MetadataType.Array:
+                    return Instruction.Create(OpCodes.Ldind_Ref);
+                case MetadataType.ValueType:
+                    return Instruction.Create(OpCodes.Ldobj, typeRef);
+                default:
+                    var type = typeRef.Resolve();
+                    if (type == null)
+                    {
+                        return Instruction.Create(OpCodes.Ldobj, typeRef);
+                    }
+
+                    if (type.IsValueType)
+                    {
+                        return Instruction.Create(OpCodes.Ldobj, type);
+                    }
+
+                    return Instruction.Create(OpCodes.Ldind_Ref);
+            }
         }
 
         public static Instruction SetArgument(ParameterDefinition parameter)
@@ -1144,9 +1425,13 @@ namespace Katuusagi.ILPostProcessorCommon.Editor
             return false;
         }
 
-        public static bool TryGetConstValue<T>(this Instruction instruction, MethodReference method, out T value, List<Instruction> instructions = null)
+        public static bool TryGetConstValue<T>(this Instruction self, MethodReference method, out T value, List<Instruction> instructions = null)
         {
-            if (instruction.TryGetConstValue(method, typeof(T), out object r, instructions) &&
+            if (self == null)
+            {
+                throw new ArgumentNullException(nameof(self));
+            }
+            if (self.TryGetConstValue(method, typeof(T), out object r, instructions) &&
                 r is T resultValue)
             {
                 value = resultValue;
@@ -1157,9 +1442,13 @@ namespace Katuusagi.ILPostProcessorCommon.Editor
             return false;
         }
 
-        public static bool TryGetConstValue(this Instruction instruction, MethodReference method, Type type, out object value, List<Instruction> instructions = null)
+        public static bool TryGetConstValue(this Instruction self, MethodReference method, Type type, out object value, List<Instruction> instructions = null)
         {
-            if (!instruction.TryGetConstValue(method, out value, instructions))
+            if (self == null)
+            {
+                throw new ArgumentNullException(nameof(self));
+            }
+            if (!self.TryGetConstValue(method, out value, instructions))
             {
                 return false;
             }
@@ -1167,20 +1456,24 @@ namespace Katuusagi.ILPostProcessorCommon.Editor
             return TryCast(type, value, out value);
         }
 
-        public static bool TryGetConstValue(this Instruction instruction, MethodReference methodRef, out object value, List<Instruction> instructions = null)
+        public static bool TryGetConstValue(this Instruction self, MethodReference methodRef, out object value, List<Instruction> instructions = null)
         {
-            var opCode = instruction.OpCode;
-            var operand = instruction.Operand;
+            if (self == null)
+            {
+                throw new ArgumentNullException(nameof(self));
+            }
+            var opCode = self.OpCode;
+            var operand = self.Operand;
             if (opCode == OpCodes.Ldnull)
             {
-                instructions?.Add(instruction);
+                instructions?.Add(self);
                 value = null;
                 return true;
             }
 
             if (opCode == OpCodes.Ldstr)
             {
-                instructions?.Add(instruction);
+                instructions?.Add(self);
                 if (operand is string)
                 {
                     value = operand;
@@ -1192,67 +1485,67 @@ namespace Katuusagi.ILPostProcessorCommon.Editor
             }
             if (opCode == OpCodes.Ldc_I4_0)
             {
-                instructions?.Add(instruction);
+                instructions?.Add(self);
                 value = 0;
                 return true;
             }
             if (opCode == OpCodes.Ldc_I4_1)
             {
-                instructions?.Add(instruction);
+                instructions?.Add(self);
                 value = 1;
                 return true;
             }
             if (opCode == OpCodes.Ldc_I4_2)
             {
-                instructions?.Add(instruction);
+                instructions?.Add(self);
                 value = 2;
                 return true;
             }
             if (opCode == OpCodes.Ldc_I4_3)
             {
-                instructions?.Add(instruction);
+                instructions?.Add(self);
                 value = 3;
                 return true;
             }
             if (opCode == OpCodes.Ldc_I4_4)
             {
-                instructions?.Add(instruction);
+                instructions?.Add(self);
                 value = 4;
                 return true;
             }
             if (opCode == OpCodes.Ldc_I4_5)
             {
-                instructions?.Add(instruction);
+                instructions?.Add(self);
                 value = 5;
                 return true;
             }
             if (opCode == OpCodes.Ldc_I4_6)
             {
-                instructions?.Add(instruction);
+                instructions?.Add(self);
                 value = 6;
                 return true;
             }
             if (opCode == OpCodes.Ldc_I4_7)
             {
-                instructions?.Add(instruction);
+                instructions?.Add(self);
                 value = 7;
                 return true;
             }
             if (opCode == OpCodes.Ldc_I4_8)
             {
-                instructions?.Add(instruction);
+                instructions?.Add(self);
                 value = 8;
                 return true;
             }
             if (opCode == OpCodes.Ldc_I4_M1)
             {
-                instructions?.Add(instruction);
+                instructions?.Add(self);
                 value = -1;
                 return true;
             }
             if (opCode == OpCodes.Ldc_I4_S || opCode == OpCodes.Ldc_I4)
             {
-                instructions?.Add(instruction);
+                instructions?.Add(self);
                 if (operand is int)
                 {
                     value = operand;
@@ -1265,7 +1558,7 @@ namespace Katuusagi.ILPostProcessorCommon.Editor
 
             if (opCode == OpCodes.Ldc_I8)
             {
-                instructions?.Add(instruction);
+                instructions?.Add(self);
                 if (operand is long)
                 {
                     value = operand;
@@ -1278,7 +1571,7 @@ namespace Katuusagi.ILPostProcessorCommon.Editor
 
             if (opCode == OpCodes.Ldc_R4)
             {
-                instructions?.Add(instruction);
+                instructions?.Add(self);
                 if (operand is float)
                 {
                     value = operand;
@@ -1291,7 +1584,7 @@ namespace Katuusagi.ILPostProcessorCommon.Editor
 
             if (opCode == OpCodes.Ldc_R8)
             {
-                instructions?.Add(instruction);
+                instructions?.Add(self);
                 if (operand is double)
                 {
                     value = operand;
@@ -1304,8 +1597,8 @@ namespace Katuusagi.ILPostProcessorCommon.Editor
 
             if (opCode == OpCodes.Ldtoken)
             {
-                instructions?.Add(instruction);
-                value = instruction.Operand;
+                instructions?.Add(self);
+                value = self.Operand;
                 return true;
             }
 
@@ -1314,7 +1607,7 @@ namespace Katuusagi.ILPostProcessorCommon.Editor
                 if (operand is MethodReference method &&
                     method.IsStatic())
                 {
-                    instructions?.Add(instruction);
+                    instructions?.Add(self);
                     value = operand;
                     return true;
                 }
@@ -1325,7 +1618,7 @@ namespace Katuusagi.ILPostProcessorCommon.Editor
 
             if (opCode == OpCodes.Conv_I1)
             {
-                if (!instruction.TryGetStackPushedInstruction(methodRef, -1, out var prev))
+                if (!self.TryGetStackPushedInstruction(methodRef, -1, out var prev))
                 {
                     value = null;
                     return false;
@@ -1336,7 +1629,7 @@ namespace Katuusagi.ILPostProcessorCommon.Editor
                     return false;
                 }
 
-                instructions?.Add(instruction);
+                instructions?.Add(self);
                 if (value is int intValue)
                 {
                     value = (sbyte)intValue;
@@ -1362,7 +1655,7 @@ namespace Katuusagi.ILPostProcessorCommon.Editor
 
             if (opCode == OpCodes.Conv_I2)
             {
-                if (!instruction.TryGetStackPushedInstruction(methodRef, -1, out var prev))
+                if (!self.TryGetStackPushedInstruction(methodRef, -1, out var prev))
                 {
                     value = null;
                     return false;
@@ -1373,7 +1666,7 @@ namespace Katuusagi.ILPostProcessorCommon.Editor
                     return false;
                 }
 
-                instructions?.Add(instruction);
+                instructions?.Add(self);
                 if (value is int intValue)
                 {
                     value = (short)intValue;
@@ -1399,7 +1692,7 @@ namespace Katuusagi.ILPostProcessorCommon.Editor
 
             if (opCode == OpCodes.Conv_I4)
             {
-                if (!instruction.TryGetStackPushedInstruction(methodRef, -1, out var prev))
+                if (!self.TryGetStackPushedInstruction(methodRef, -1, out var prev))
                 {
                     value = null;
                     return false;
@@ -1410,7 +1703,7 @@ namespace Katuusagi.ILPostProcessorCommon.Editor
                     return false;
                 }
 
-                instructions?.Add(instruction);
+                instructions?.Add(self);
                 if (value is int intValue)
                 {
                     value = intValue;
@@ -1436,7 +1729,7 @@ namespace Katuusagi.ILPostProcessorCommon.Editor
 
             if (opCode == OpCodes.Conv_I8)
             {
-                if (!instruction.TryGetStackPushedInstruction(methodRef, -1, out var prev))
+                if (!self.TryGetStackPushedInstruction(methodRef, -1, out var prev))
                 {
                     value = null;
                     return false;
@@ -1447,7 +1740,7 @@ namespace Katuusagi.ILPostProcessorCommon.Editor
                     return false;
                 }
 
-                instructions?.Add(instruction);
+                instructions?.Add(self);
                 if (value is int intValue)
                 {
                     value = (long)intValue;
@@ -1470,11 +1763,11 @@ namespace Katuusagi.ILPostProcessorCommon.Editor
                 }
                 return true;
             }
-            
+
 
             if (opCode == OpCodes.Newobj)
             {
-                var method = instruction.Operand as MethodReference;
+                var method = self.Operand as MethodReference;
                 if (!method.DeclaringType.IsDelegate() ||
                     method.Parameters.Count != 2 ||
                     method.Parameters[0].ParameterType.FullName != "System.Object" ||
@@ -1484,23 +1777,23 @@ namespace Katuusagi.ILPostProcessorCommon.Editor
                     return false;
                 }
 
-                if (!instruction.TryGetPushConstArgumentInstructions(methodRef, 0, out value, instructions))
+                if (!self.TryGetPushConstArgumentInstructions(methodRef, 0, out value, instructions))
                 {
                     return false;
                 }
 
-                if (!instruction.TryGetPushConstArgumentInstructions(methodRef, 1, out value, instructions))
+                if (!self.TryGetPushConstArgumentInstructions(methodRef, 1, out value, instructions))
                 {
                     return false;
                 }
 
-                instructions?.Add(instruction);
+                instructions?.Add(self);
                 return true;
             }
 
             if (opCode == OpCodes.Box)
             {
-                if (!instruction.TryGetStackPushedInstruction(methodRef, -1, out var prev))
+                if (!self.TryGetStackPushedInstruction(methodRef, -1, out var prev))
                 {
                     value = null;
                     return false;
@@ -1511,31 +1804,31 @@ namespace Katuusagi.ILPostProcessorCommon.Editor
                     return false;
                 }
 
-                instructions?.Add(instruction);
+                instructions?.Add(self);
                 return true;
             }
 
             if (opCode == OpCodes.Call)
             {
-                var method = instruction.Operand as MethodReference;
+                var method = self.Operand as MethodReference;
                 if (method.FullName != "System.Type System.Type::GetTypeFromHandle(System.RuntimeTypeHandle)")
                 {
                     value = null;
                     return false;
                 }
 
-                if (!instruction.TryGetPushConstArgumentInstructions(methodRef, 0, out value, instructions))
+                if (!self.TryGetPushConstArgumentInstructions(methodRef, 0, out value, instructions))
                 {
                     return false;
                 }
 
-                instructions?.Add(instruction);
+                instructions?.Add(self);
                 return true;
             }
 
             if (opCode == OpCodes.Ldsfld)
             {
-                var field = instruction.Operand as FieldReference;
+                var field = self.Operand as FieldReference;
                 var declaringTypeName = field.DeclaringType.Name;
                 if (declaringTypeName != "$$ConstTable" && !declaringTypeName.StartsWith("$$StaticTable_", StringComparison.Ordinal))
                 {
@@ -1544,12 +1837,30 @@ namespace Katuusagi.ILPostProcessorCommon.Editor
                 }
 
                 value = field;
-                instructions?.Add(instruction);
+                instructions?.Add(self);
                 return true;
             }
 
             value = null;
             return false;
+        }
+
+
+        public static IEnumerable<System.Reflection.ConstructorInfo> FindConstructs<T>(System.Reflection.Assembly assembly)
+            where T : Attribute
+        {
+            foreach (var type in assembly.GetTypes())
+            {
+                foreach (var method in type.GetConstructors())
+                {
+                    if (System.Reflection.CustomAttributeExtensions.GetCustomAttribute<T>(method) == null)
+                    {
+                        continue;
+                    }
+
+                    yield return method;
+                }
+            }
         }
 
         public static IEnumerable<System.Reflection.MethodInfo> FindMethods<T>(System.Reflection.Assembly assembly)
@@ -1604,27 +1915,31 @@ namespace Katuusagi.ILPostProcessorCommon.Editor
             return $"{GetTypeName(member.DeclaringType)}.{member.Name}";
         }
 
-        public static bool IsStatic(this MemberReference member)
+        public static bool IsStatic(this MemberReference self)
         {
+            if (self == null)
             {
-                if (member is FieldDefinition field)
+                throw new ArgumentNullException(nameof(self));
+            }
+            {
+                if (self is FieldDefinition field)
                 {
                     return field.IsStatic;
                 }
 
-                if (member is PropertyDefinition property)
+                if (self is PropertyDefinition property)
                 {
                     return (property.GetMethod?.IsStatic ?? false) ||
                            (property.SetMethod?.IsStatic ?? false) ||
                            (property.OtherMethods?.Any(v => v.IsStatic) ?? false);
                 }
 
-                if (member is MethodDefinition method)
+                if (self is MethodDefinition method)
                 {
                     return method.IsStatic;
                 }
 
-                if (member is EventDefinition @event)
+                if (self is EventDefinition @event)
                 {
                     return (@event.AddMethod?.IsStatic ?? false) ||
                            (@event.RemoveMethod?.IsStatic ?? false) ||
@@ -1632,12 +1947,12 @@ namespace Katuusagi.ILPostProcessorCommon.Editor
                 }
             }
             {
-                if (member is FieldReference field)
+                if (self is FieldReference field)
                 {
                     return field.Resolve().IsStatic;
                 }
 
-                if (member is PropertyReference property)
+                if (self is PropertyReference property)
                 {
                     var p = property.Resolve();
                     return (p.GetMethod?.IsStatic ?? false) ||
@@ -1645,12 +1960,12 @@ namespace Katuusagi.ILPostProcessorCommon.Editor
                            (p.OtherMethods?.Any(v => v.IsStatic) ?? false);
                 }
 
-                if (member is MethodReference method)
+                if (self is MethodReference method)
                 {
                     return method.Resolve().IsStatic;
                 }
 
-                if (member is EventDefinition @event)
+                if (self is EventDefinition @event)
                 {
                     var e = @event.Resolve();
                     return (e.AddMethod?.IsStatic ?? false) ||
@@ -1662,33 +1977,37 @@ namespace Katuusagi.ILPostProcessorCommon.Editor
             return false;
         }
 
-        public static bool IsPublic(this MemberReference member)
+        public static bool IsPublic(this MemberReference self)
         {
+            if (self == null)
             {
-                if (member is TypeDefinition type)
+                throw new ArgumentNullException(nameof(self));
+            }
+            {
+                if (self is TypeDefinition type)
                 {
                     return type.IsPublic || type.IsNestedPublic;
                 }
 
-                if (member is FieldDefinition field)
+                if (self is FieldDefinition field)
                 {
                     return field.IsPublic;
                 }
 
-                if (member is PropertyDefinition property)
+                if (self is PropertyDefinition property)
                 {
-                    
+
                     return (property.GetMethod?.IsPublic ?? false) ||
                            (property.SetMethod?.IsPublic ?? false) ||
                            (property.OtherMethods?.Any(v => v.IsPublic) ?? false);
                 }
 
-                if (member is MethodDefinition method)
+                if (self is MethodDefinition method)
                 {
                     return method.IsPublic;
                 }
 
-                if (member is EventDefinition @event)
+                if (self is EventDefinition @event)
                 {
                     return (@event.AddMethod?.IsPublic ?? false) ||
                            (@event.RemoveMethod?.IsPublic ?? false) ||
@@ -1696,18 +2015,18 @@ namespace Katuusagi.ILPostProcessorCommon.Editor
                 }
             }
             {
-                if (member is TypeReference type)
+                if (self is TypeReference type)
                 {
                     var typeRef = type.Resolve();
                     return typeRef.IsPublic || typeRef.IsNestedPublic;
                 }
 
-                if (member is FieldReference field)
+                if (self is FieldReference field)
                 {
                     return field.Resolve().IsPublic;
                 }
 
-                if (member is PropertyReference property)
+                if (self is PropertyReference property)
                 {
                     var p = property.Resolve();
                     return (p.GetMethod?.IsPublic ?? false) ||
@@ -1715,12 +2034,12 @@ namespace Katuusagi.ILPostProcessorCommon.Editor
                            (p.OtherMethods?.Any(v => v.IsPublic) ?? false);
                 }
 
-                if (member is MethodReference method)
+                if (self is MethodReference method)
                 {
                     return method.Resolve().IsPublic;
                 }
 
-                if (member is EventDefinition @event)
+                if (self is EventDefinition @event)
                 {
                     var e = @event.Resolve();
                     return (e.AddMethod?.IsPublic ?? false) ||
@@ -1732,14 +2051,14 @@ namespace Katuusagi.ILPostProcessorCommon.Editor
             return false;
         }
 
-        public static bool IsDelegate(this TypeReference typeRef)
+        public static bool IsDelegate(this TypeReference self)
         {
-            if (typeRef == null)
+            if (self == null)
             {
-                return false;
+                throw new ArgumentNullException(nameof(self));
             }
 
-            var typeDef = typeRef.Resolve();
+            var typeDef = self.Resolve();
             if (typeDef == null)
             {
                 return false;
@@ -1847,24 +2166,34 @@ namespace Katuusagi.ILPostProcessorCommon.Editor
             return $"{GetTypeName(method.DeclaringType)}.{method.Name}({parameters})";
         }
 
-        public static bool IsStructRecursive(this Type type)
+        public static bool IsStructRecursive(this Type self)
         {
-            if (type.IsPrimitive || type.IsEnum)
+            if (self == null)
+            {
+                throw new ArgumentNullException(nameof(self));
+            }
+
+            if (self.IsPrimitive || self.IsEnum)
             {
                 return true;
             }
 
-            if (!type.IsValueType)
+            if (!self.IsValueType)
             {
                 return false;
             }
 
-            var fields = type.GetFields( System.Reflection.BindingFlags.Public |  System.Reflection.BindingFlags.NonPublic |  System.Reflection.BindingFlags.Instance);
+            var fields = self.GetFields(System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
             return fields.Select(v => v.FieldType).All(IsStructRecursive);
         }
 
         public static bool IsStructRecursive(this TypeReference self)
         {
+            if (self == null)
+            {
+                throw new ArgumentNullException(nameof(self));
+            }
+
             if (self.IsPrimitive)
             {
                 return true;
@@ -1901,15 +2230,20 @@ namespace Katuusagi.ILPostProcessorCommon.Editor
                 funcType = Type.GetType(typeName);
                 return funcType.MakeGenericType(args.ToArray());
             }
-            
+
             typeName = $"System.Func`{count + 1}";
             funcType = Type.GetType(typeName);
             return funcType.MakeGenericType(args.Append(ret).ToArray());
         }
 
-        public static MethodReference MakeGenericInstanceMethod(this MethodReference method, IEnumerable<TypeReference> arguments)
+        public static MethodReference MakeGenericInstanceMethod(this MethodReference self, IEnumerable<TypeReference> arguments)
         {
-            var genericInstanceMethod = new GenericInstanceMethod(method);
+            if (self == null)
+            {
+                throw new ArgumentNullException(nameof(self));
+            }
+
+            var genericInstanceMethod = new GenericInstanceMethod(self);
             foreach (TypeReference item in arguments)
             {
                 genericInstanceMethod.GenericArguments.Add(item);
@@ -1919,6 +2253,11 @@ namespace Katuusagi.ILPostProcessorCommon.Editor
 
         public static GenericInstanceType MakeGenericInstanceType(this TypeReference self, IEnumerable<TypeReference> arguments)
         {
+            if (self == null)
+            {
+                throw new ArgumentNullException(nameof(self));
+            }
+
             GenericInstanceType genericInstanceType = new GenericInstanceType(self);
             foreach (TypeReference item in arguments)
             {
@@ -1928,9 +2267,14 @@ namespace Katuusagi.ILPostProcessorCommon.Editor
             return genericInstanceType;
         }
 
-        public static IList<TypeReference> GetGenericArguments(this MethodReference methodRef)
+        public static IList<TypeReference> GetGenericArguments(this MethodReference self)
         {
-            if (!(methodRef is GenericInstanceMethod genMethod))
+            if (self == null)
+            {
+                throw new ArgumentNullException(nameof(self));
+            }
+
+            if (!(self is GenericInstanceMethod genMethod))
             {
                 return Array.Empty<TypeReference>();
             }
@@ -1938,9 +2282,14 @@ namespace Katuusagi.ILPostProcessorCommon.Editor
             return genMethod.GenericArguments;
         }
 
-        public static IList<TypeReference> GetGenericArguments(this TypeReference typeRef)
+        public static IList<TypeReference> GetGenericArguments(this TypeReference self)
         {
-            if (!(typeRef is GenericInstanceType genType))
+            if (self == null)
+            {
+                throw new ArgumentNullException(nameof(self));
+            }
+
+            if (!(self is GenericInstanceType genType))
             {
                 return Array.Empty<TypeReference>();
             }
@@ -1948,9 +2297,14 @@ namespace Katuusagi.ILPostProcessorCommon.Editor
             return genType.GenericArguments;
         }
 
-        public static IEnumerable<TypeReference> GetNestedTypes(this TypeReference typeRef, TypeDefinition type)
+        public static IEnumerable<TypeReference> GetNestedTypes(this TypeReference self, TypeDefinition type)
         {
-            if (!(typeRef is GenericInstanceType genType))
+            if (self == null)
+            {
+                throw new ArgumentNullException(nameof(self));
+            }
+
+            if (!(self is GenericInstanceType genType))
             {
                 return type.NestedTypes;
             }
@@ -1961,29 +2315,34 @@ namespace Katuusagi.ILPostProcessorCommon.Editor
                                       .OfType<TypeReference>();
         }
 
-        public static TypeReference GetDeclaringType(this TypeReference typeRef)
+        public static TypeReference GetDeclaringType(this TypeReference self)
         {
-            if (typeRef.DeclaringType == null)
+            if (self == null)
+            {
+                throw new ArgumentNullException(nameof(self));
+            }
+
+            if (self.DeclaringType == null)
             {
                 return null;
             }
 
-            if (typeRef.IsGenericDefinition())
+            if (self.IsGenericDefinition())
             {
-                var def = typeRef.DeclaringType.Resolve();
+                var def = self.DeclaringType.Resolve();
                 if (def == null)
                 {
-                    return typeRef.DeclaringType.GetElementType();
+                    return self.DeclaringType.GetElementType();
                 }
                 return def;
             }
 
-            if (typeRef is GenericInstanceType genType)
+            if (self is GenericInstanceType genType)
             {
-                TypeReference type = typeRef.Resolve();
+                TypeReference type = self.Resolve();
                 if (type == null)
                 {
-                    type = typeRef.GetElementType();
+                    type = self.GetElementType();
                 }
 
                 TypeReference declaringType = type.DeclaringType.Resolve();
@@ -1996,17 +2355,275 @@ namespace Katuusagi.ILPostProcessorCommon.Editor
                 var declairingGenArgs = genArgs.Take(declaringType.GenericParameters.Count);
                 if (!declairingGenArgs.Any())
                 {
-                    return typeRef.DeclaringType;
+                    return self.DeclaringType;
                 }
 
                 return declaringType.MakeGenericInstanceType(declairingGenArgs);
             }
 
-            return typeRef.DeclaringType;
+            return self.DeclaringType;
+        }
+
+        public static void GetBaseTypeAndInterfaces(this TypeReference self, List<TypeReference> results, bool onlyInterface = false)
+        {
+            if (self == null)
+            {
+                throw new ArgumentNullException(nameof(self));
+            }
+            var type = self.Resolve();
+            if (type == null || type.BaseType == null)
+            {
+                return;
+            }
+
+            if (self is GenericInstanceType genType)
+            {
+                GetBaseTypeAndInterfaces(genType, onlyInterface, results);
+            }
+            else if (self is ArrayType arrayType)
+            {
+                GetBaseTypeAndInterfaces(arrayType, onlyInterface, results);
+            }
+            else if (self is ByReferenceType byRefType)
+            {
+                GetBaseTypeAndInterfaces(byRefType, onlyInterface, results);
+            }
+            else if (self is PointerType pointerType)
+            {
+                GetBaseTypeAndInterfaces(pointerType, onlyInterface, results);
+            }
+            else if (self is FunctionPointerType funcPtrType)
+            {
+                GetBaseTypeAndInterfaces(funcPtrType, onlyInterface, results);
+            }
+            else if (self is RequiredModifierType reqmodType)
+            {
+                GetBaseTypeAndInterfaces(reqmodType, onlyInterface, results);
+            }
+            else if (self is OptionalModifierType optmodType)
+            {
+                GetBaseTypeAndInterfaces(optmodType, onlyInterface, results);
+            }
+            else if (self is SentinelType sentinelType)
+            {
+                GetBaseTypeAndInterfaces(sentinelType, onlyInterface, results);
+            }
+            else if (self is PinnedType pinnedType)
+            {
+                GetBaseTypeAndInterfaces(pinnedType, onlyInterface, results);
+            }
+            else
+            {
+                if (type.BaseType != null && !onlyInterface)
+                {
+                    results.Add(type.BaseType);
+                }
+
+                foreach (var interfaceImpl in type.Interfaces)
+                {
+                    results.Add(interfaceImpl.InterfaceType);
+                }
+            }
+        }
+
+        public static void GetBaseTypeAndInterfaces(this GenericInstanceType self, bool onlyInterface, List<TypeReference> results)
+        {
+            if (self == null)
+            {
+                throw new ArgumentNullException(nameof(self));
+            }
+            var type = self.Resolve();
+            if (type == null)
+            {
+                return;
+            }
+
+            using (ThreadStaticListPool.Get<TypeReference>(out var baseTypes))
+            {
+                if (type.BaseType != null && !onlyInterface)
+                {
+                    baseTypes.Add(type.BaseType);
+                }
+
+                foreach (var interfaceImpl in type.Interfaces)
+                {
+                    baseTypes.Add(interfaceImpl.InterfaceType);
+                }
+
+                foreach (var baseType in baseTypes)
+                {
+                    if (baseType.ContainsGenericParameter)
+                    {
+                        if (baseType is GenericInstanceType genericInstanceType)
+                        {
+                            bool isReplaced = false;
+                            using (ThreadStaticListPool.Get<TypeReference>(out var genArgs))
+                            {
+                                for (int i = 0; i < genericInstanceType.GenericArguments.Count; ++i)
+                                {
+                                    var arg = genericInstanceType.GenericArguments[i];
+                                    if (self.TryReplaceGenericParameter(arg, out arg))
+                                    {
+                                        isReplaced = true;
+                                    }
+                                    genArgs.Add(arg);
+                                }
+
+                                if (!isReplaced)
+                                {
+                                    results.Add(baseType);
+                                    return;
+                                }
+
+                                results.Add(genericInstanceType.Resolve().MakeGenericInstanceType(genArgs));
+                            }
+                        }
+                        else if (baseType is RequiredModifierType reqmodType)
+                        {
+                            bool isReplaced = false;
+                            if (self.TryReplaceGenericParameter(reqmodType.ElementType, out var elementType))
+                            {
+                                isReplaced = true;
+                            }
+                            if (self.TryReplaceGenericParameter(reqmodType.ModifierType, out var modifierType))
+                            {
+                                isReplaced = true;
+                            }
+                            if (!isReplaced)
+                            {
+                                results.Add(baseType);
+                                return;
+                            }
+                            results.Add(elementType.MakeRequiredModifierType(modifierType));
+                        }
+                        else if (baseType is OptionalModifierType optmodType)
+                        {
+                            bool isReplaced = false;
+                            if (self.TryReplaceGenericParameter(optmodType.ElementType, out var elementType))
+                            {
+                                isReplaced = true;
+                            }
+                            if (self.TryReplaceGenericParameter(optmodType.ModifierType, out var modifierType))
+                            {
+                                isReplaced = true;
+                            }
+                            if (!isReplaced)
+                            {
+                                results.Add(baseType);
+                                return;
+                            }
+                            results.Add(elementType.MakeOptionalModifierType(modifierType));
+                        }
+                        else
+                        {
+                            ILPPUtils.Log($"invalid base type.{baseType.FullName}");
+                            results.Add(baseType);
+                        }
+                    }
+                    else
+                    {
+                        results.Add(baseType);
+                    }
+                }
+            }
+        }
+
+        public static void GetBaseTypeAndInterfaces(this ArrayType self, bool onlyInterface, List<TypeReference> results)
+        {
+            if (self == null)
+            {
+                throw new ArgumentNullException(nameof(self));
+            }
+            var type = self.Resolve();
+            if (type == null)
+            {
+                return;
+            }
+
+            results.Add(type.Module.ImportReference(typeof(Array)));
+            results.Add(type.Module.ImportReference(typeof(IStructuralComparable)));
+            results.Add(type.Module.ImportReference(typeof(IStructuralEquatable)));
+            results.Add(type.Module.ImportReference(typeof(IReadOnlyList<>)).MakeGenericInstanceType(self.ElementType));
+            results.Add(type.Module.ImportReference(typeof(ICloneable)));
+            results.Add(type.Module.ImportReference(typeof(ICollection)));
+            results.Add(type.Module.ImportReference(typeof(IEnumerable<>)).MakeGenericInstanceType(self.ElementType));
+            results.Add(type.Module.ImportReference(typeof(IEnumerable)));
+            results.Add(type.Module.ImportReference(typeof(IList<>)).MakeGenericInstanceType(self.ElementType));
+            results.Add(type.Module.ImportReference(typeof(IList)));
+            results.Add(type.Module.ImportReference(typeof(IReadOnlyCollection<>)).MakeGenericInstanceType(self.ElementType));
+            results.Add(type.Module.ImportReference(typeof(ICollection<>)).MakeGenericInstanceType(self.ElementType));
+        }
+
+        public static void GetBaseTypeAndInterfaces(this ByReferenceType self, bool onlyInterface, List<TypeReference> results)
+        {
+            if (self == null)
+            {
+                throw new ArgumentNullException(nameof(self));
+            }
+            GetBaseTypeAndInterfaces(self.ElementType, results, true);
+        }
+
+        public static void GetBaseTypeAndInterfaces(this PointerType self, bool onlyInterface, List<TypeReference> results)
+        {
+            if (self == null)
+            {
+                throw new ArgumentNullException(nameof(self));
+            }
+            // ignore
+        }
+
+        public static void GetBaseTypeAndInterfaces(this FunctionPointerType self, bool onlyInterface, List<TypeReference> results)
+        {
+            if (self == null)
+            {
+                throw new ArgumentNullException(nameof(self));
+            }
+            // ignore
+        }
+
+        public static void GetBaseTypeAndInterfaces(this RequiredModifierType self, bool onlyInterface, List<TypeReference> results)
+        {
+            if (self == null)
+            {
+                throw new ArgumentNullException(nameof(self));
+            }
+            GetBaseTypeAndInterfaces(self.ElementType, results, true);
+        }
+
+        public static void GetBaseTypeAndInterfaces(this OptionalModifierType self, bool onlyInterface, List<TypeReference> results)
+        {
+            if (self == null)
+            {
+                throw new ArgumentNullException(nameof(self));
+            }
+            GetBaseTypeAndInterfaces(self.ElementType, results, true);
+        }
+
+        public static void GetBaseTypeAndInterfaces(this SentinelType self, bool onlyInterface, List<TypeReference> results)
+        {
+            if (self == null)
+            {
+                throw new ArgumentNullException(nameof(self));
+            }
+            // ignore
+        }
+
+        public static void GetBaseTypeAndInterfaces(this PinnedType self, bool onlyInterface, List<TypeReference> results)
+        {
+            if (self == null)
+            {
+                throw new ArgumentNullException(nameof(self));
+            }
+            GetBaseTypeAndInterfaces(self.ElementType, results, true);
         }
 
         public static IEnumerable<FieldDefinition> GetFields(this TypeReference self)
         {
+            if (self == null)
+            {
+                throw new ArgumentNullException(nameof(self));
+            }
+
             if (self is GenericInstanceType genType)
             {
                 return genType.GetFields();
@@ -2027,6 +2644,10 @@ namespace Katuusagi.ILPostProcessorCommon.Editor
 
         public static FieldDefinition[] GetFields(this GenericInstanceType self)
         {
+            if (self == null)
+            {
+                throw new ArgumentNullException(nameof(self));
+            }
             var type = self.Resolve();
             if (type == null)
             {
@@ -2056,7 +2677,7 @@ namespace Katuusagi.ILPostProcessorCommon.Editor
         public static bool TryReplaceGenericParameter(this GenericInstanceType typeRef, TypeReference src, out TypeReference result)
         {
             result = src;
-            if (src.IsGenericParameter)
+            if (src is GenericParameter genericParameter)
             {
                 var arguments = typeRef.GenericArguments;
                 var parameters = typeRef.ElementType.GenericParameters;
@@ -2072,18 +2693,36 @@ namespace Katuusagi.ILPostProcessorCommon.Editor
                 return true;
             }
 
-            if (src.ContainsGenericParameter &&
-                src is GenericInstanceType genType)
+            if (src.ContainsGenericParameter)
             {
-                bool isReplaced = false;
-                using (ThreadStaticArrayPool.Get<TypeReference>(out var genArgs, genType.GenericArguments.Count))
+                if (src is GenericInstanceType genType)
                 {
-                    for (int i = 0; i < genArgs.Length; ++i)
+                    bool isReplaced = false;
+                    using (ThreadStaticArrayPool.Get<TypeReference>(out var genArgs, genType.GenericArguments.Count))
                     {
-                        if (typeRef.TryReplaceGenericParameter(genType.GenericArguments[i], out genArgs[i]))
+                        for (int i = 0; i < genArgs.Length; ++i)
                         {
-                            isReplaced = true;
+                            if (TryReplaceGenericParameter(typeRef, genType.GenericArguments[i], out genArgs[i]))
+                            {
+                                isReplaced = true;
+                            }
                         }
+
+                        if (!isReplaced)
+                        {
+                            return false;
+                        }
+
+                        result = genType.GetDeclaringType().MakeGenericInstanceType(genArgs);
+                        return true;
+                    }
+                }
+                else if (src is ArrayType arrayType)
+                {
+                    bool isReplaced = false;
+                    if (TryReplaceGenericParameter(typeRef, arrayType.ElementType, out var elementType))
+                    {
+                        isReplaced = true;
                     }
 
                     if (!isReplaced)
@@ -2091,27 +2730,158 @@ namespace Katuusagi.ILPostProcessorCommon.Editor
                         return false;
                     }
 
-                    result = genType.GetDeclaringType().MakeGenericInstanceType(genArgs);
+                    if (arrayType.IsVector)
+                    {
+                        result = elementType.MakeArrayType();
+                        return true;
+                    }
+
+                    result = elementType.MakeArrayType(arrayType.Rank);
                     return true;
+                }
+                else if (src is ByReferenceType byRefType)
+                {
+                    if (TryReplaceGenericParameter(typeRef, byRefType.ElementType, out var elementType))
+                    {
+                        result = elementType.MakeByReferenceType();
+                        return true;
+                    }
+                }
+                else if (src is PointerType pointerType)
+                {
+                    if (TryReplaceGenericParameter(typeRef, pointerType.ElementType, out var elementType))
+                    {
+                        result = elementType.MakePointerType();
+                        return true;
+                    }
+                }
+                else if (src is FunctionPointerType funcPtrType)
+                {
+                    bool isReplaced = false;
+                    if (TryReplaceGenericParameter(typeRef, funcPtrType.ReturnType, out var returnType))
+                    {
+                        isReplaced = true;
+                    }
+
+                    using (ThreadStaticArrayPool.Get<ParameterDefinition>(out var parameters, funcPtrType.Parameters.Count))
+                    {
+                        for (int i = 0; i < parameters.Length; ++i)
+                        {
+                            var param = funcPtrType.Parameters[i];
+                            if (TryReplaceGenericParameter(typeRef, param.ParameterType, out var paramType))
+                            {
+                                isReplaced = true;
+                                var newParam = new ParameterDefinition(param.Name, param.Attributes, paramType);
+                                foreach (var attr in param.CustomAttributes)
+                                {
+                                    newParam.CustomAttributes.Add(attr);
+                                }
+                                newParam.Constant = param.Constant;
+                                newParam.MarshalInfo = param.MarshalInfo;
+                                parameters[i] = newParam;
+                            }
+                            else
+                            {
+                                parameters[i] = param;
+                            }
+                        }
+                        if (isReplaced)
+                        {
+                            var newFuncPtr = new FunctionPointerType();
+                            newFuncPtr.ReturnType = returnType;
+                            foreach (var param in parameters)
+                            {
+                                newFuncPtr.Parameters.Add(param);
+                            }
+                            result = newFuncPtr;
+                            return true;
+                        }
+                    }
+                }
+                else if (src is RequiredModifierType reqModType)
+                {
+                    bool isReplaced = false;
+                    if (TryReplaceGenericParameter(typeRef, reqModType.ElementType, out var elementType))
+                    {
+                        isReplaced = true;
+                    }
+                    if (TryReplaceGenericParameter(typeRef, reqModType.ModifierType, out var modifierType))
+                    {
+                        isReplaced = true;
+                    }
+
+                    if (!isReplaced)
+                    {
+                        return false;
+                    }
+
+                    result = elementType.MakeRequiredModifierType(modifierType);
+                    return true;
+                }
+                else if (src is OptionalModifierType optModType)
+                {
+                    bool isReplaced = false;
+                    if (TryReplaceGenericParameter(typeRef, optModType.ElementType, out var elementType))
+                    {
+                        isReplaced = true;
+                    }
+                    if (TryReplaceGenericParameter(typeRef, optModType.ModifierType, out var modifierType))
+                    {
+                        isReplaced = true;
+                    }
+                    if (!isReplaced)
+                    {
+                        return false;
+                    }
+                    result = elementType.MakeOptionalModifierType(modifierType);
+                    return true;
+                }
+                else if (src is SentinelType sentinelType)
+                {
+                    if (TryReplaceGenericParameter(typeRef, sentinelType.ElementType, out var elementType))
+                    {
+                        result = elementType.MakeSentinelType();
+                        return true;
+                    }
+                }
+                else if (src is PinnedType pinnedType)
+                {
+                    if (TryReplaceGenericParameter(typeRef, pinnedType.ElementType, out var elementType))
+                    {
+                        result = elementType.MakePinnedType();
+                        return true;
+                    }
                 }
             }
 
             return false;
         }
 
-        public static bool IsVolatile(this System.Reflection.FieldInfo field)
+        public static bool IsVolatile(this System.Reflection.FieldInfo self)
         {
-            return field.GetRequiredCustomModifiers().Contains(typeof(IsVolatile));
+            if (self == null)
+            {
+                throw new ArgumentNullException(nameof(self));
+            }
+            return self.GetRequiredCustomModifiers().Contains(typeof(IsVolatile));
         }
 
         public static bool IsVolatile(this FieldReference self)
         {
+            if (self == null)
+            {
+                throw new ArgumentNullException(nameof(self));
+            }
             return (self.FieldType is RequiredModifierType modType &&
                     modType.ModifierType.FullName == "System.Runtime.CompilerServices.IsVolatile");
         }
 
         public static TypeReference GetForceInstancedGenericType(this TypeReference self)
         {
+            if (self == null)
+            {
+                throw new ArgumentNullException(nameof(self));
+            }
             if (!IsGenericDefinition(self))
             {
                 return self;
@@ -2154,16 +2924,28 @@ namespace Katuusagi.ILPostProcessorCommon.Editor
 
         public static bool IsGenericDefinition(this TypeReference self)
         {
+            if (self == null)
+            {
+                throw new ArgumentNullException(nameof(self));
+            }
             return self.HasGenericParameters && !self.IsGenericInstance;
         }
 
         public static bool IsGenericDefinition(this MethodReference self)
         {
+            if (self == null)
+            {
+                throw new ArgumentNullException(nameof(self));
+            }
             return self.HasGenericParameters && !self.IsGenericInstance;
         }
 
         public static bool IsEnum(this TypeReference self)
         {
+            if (self == null)
+            {
+                throw new ArgumentNullException(nameof(self));
+            }
             var type = self.Resolve();
             if (type == null)
             {
@@ -2173,25 +2955,106 @@ namespace Katuusagi.ILPostProcessorCommon.Editor
             return type.IsEnum;
         }
 
-        public static bool IsString(this TypeReference self)
+        public static bool IsUnmanaged(this TypeReference self)
         {
-            var result = self.FullName == "System.String";
-            return result;
-        }
-
-        public static bool IsStruct(this TypeReference typeRef)
-        {
-            if (typeRef.IsPrimitive)
+            if (self == null)
+            {
+                throw new ArgumentNullException(nameof(self));
+            }
+            if (self.IsPrimitive || self.IsPointer || self.IsFunctionPointer)
             {
                 return true;
             }
 
-            if (typeRef.IsGenericParameter)
+            var type = self.Resolve();
+            if (type == null ||
+                !type.IsValueType)
             {
                 return false;
             }
 
-            var typeDef = typeRef.Resolve();
+            if (type.IsEnum || type.IsPrimitive)
+            {
+                return true;
+            }
+
+            IEnumerable<FieldDefinition> fields = self is GenericInstanceType genType ? GetFields(genType) : type.Fields;
+            return fields.Where(v => !v.IsStatic).All(v => IsCompatibleUnmanagedConstraint(v.FieldType));
+        }
+
+        public static bool IsString(this TypeReference self)
+        {
+            if (self == null)
+            {
+                throw new ArgumentNullException(nameof(self));
+            }
+            var result = self.FullName == "System.String";
+            return result;
+        }
+
+        public static bool IsNullable(this TypeReference self)
+        {
+            if (self == null)
+            {
+                throw new ArgumentNullException(nameof(self));
+            }
+            var type = self.Resolve();
+            if (type == null)
+            {
+                return false;
+            }
+
+            return type.FullName == "System.Nullable`1";
+        }
+
+        public static bool IsInterface(this TypeReference self)
+        {
+            if (self == null)
+            {
+                throw new ArgumentNullException(nameof(self));
+            }
+            var type = self.Resolve();
+            if (type == null)
+            {
+                return false;
+            }
+            return type.IsInterface;
+        }
+
+        public static bool IsClass(this TypeReference self)
+        {
+            if (self == null)
+            {
+                throw new ArgumentNullException(nameof(self));
+            }
+            var type = self.Resolve();
+            if (type == null ||
+                type.IsInterface ||
+                type.IsValueType)
+            {
+                return false;
+            }
+
+            return true;
+        }
+
+        public static bool IsStruct(this TypeReference self)
+        {
+            if (self == null)
+            {
+                throw new ArgumentNullException(nameof(self));
+            }
+            if (self.IsPrimitive)
+            {
+                return true;
+            }
+
+            if (self.IsGenericParameter)
+            {
+                return false;
+            }
+
+            var typeDef = self.Resolve();
             if (typeDef == null ||
                 typeDef.IsEnum ||
                 typeDef.IsValueType)
@@ -2202,9 +3065,28 @@ namespace Katuusagi.ILPostProcessorCommon.Editor
             return false;
         }
 
-        public static bool IsSealed(this TypeReference typeRef)
+        public static bool IsStaticType(this TypeReference self)
         {
-            var typeDef = typeRef.Resolve();
+            if (self == null)
+            {
+                throw new ArgumentNullException(nameof(self));
+            }
+            var type = self.Resolve();
+            if (type == null)
+            {
+                return false;
+            }
+
+            return type.IsSealed && type.IsAbstract;
+        }
+
+        public static bool IsSealed(this TypeReference self)
+        {
+            if (self == null)
+            {
+                throw new ArgumentNullException(nameof(self));
+            }
+            var typeDef = self.Resolve();
             if (typeDef == null)
             {
                 return false;
@@ -2216,6 +3098,807 @@ namespace Katuusagi.ILPostProcessorCommon.Editor
             }
 
             return false;
+        }
+
+        public static bool HasDefaultConstructor(this TypeReference self)
+        {
+            if (self == null)
+            {
+                throw new ArgumentNullException(nameof(self));
+            }
+            var type = self.Resolve();
+            if (type == null ||
+                type.IsAbstract ||
+                type.IsInterface)
+            {
+                return false;
+            }
+
+            if (type.IsValueType)
+            {
+                return true;
+            }
+
+            var result = type.Methods.Any(m => m.IsConstructor && m.IsPublic && !m.HasParameters);
+            return result;
+        }
+
+        public static bool HasNewConstraint(this GenericParameter self)
+        {
+            if (self == null)
+            {
+                throw new ArgumentNullException(nameof(self));
+            }
+            return self.HasDefaultConstructorConstraint &&
+                   !self.HasStructConstraint() &&
+                   !self.HasUnmanagedConstraint();
+        }
+
+        public static bool HasClassConstraint(this GenericParameter self)
+        {
+            if (self == null)
+            {
+                throw new ArgumentNullException(nameof(self));
+            }
+
+            return self.HasReferenceTypeConstraint &&
+                   self.GetNullableContextStatus() != NullableStatus.Nullable &&
+                   self.Constraints.All(v => v.GetNullableStatus() != NullableStatus.Nullable);
+        }
+
+        public static bool HasClassNullableConstraint(this GenericParameter self)
+        {
+            if (self == null)
+            {
+                throw new ArgumentNullException(nameof(self));
+            }
+            return self.HasReferenceTypeConstraint &&
+                   (self.GetNullableContextStatus() == NullableStatus.Nullable ||
+                   self.Constraints.Any(v => v.GetNullableStatus() == NullableStatus.Nullable));
+        }
+
+        public static bool HasUnmanagedConstraint(this GenericParameter self)
+        {
+            if (self == null)
+            {
+                throw new ArgumentNullException(nameof(self));
+            }
+            return self.GetAttribute("System.Runtime.CompilerServices.IsUnmanagedAttribute") != null ||
+                   self.Constraints.Any(v => v.HasUnmanagedConstraint());
+        }
+
+        public static bool HasUnmanagedConstraint(this GenericParameterConstraint self)
+        {
+            if (self == null)
+            {
+                throw new ArgumentNullException(nameof(self));
+            }
+
+            if (self.ConstraintType is not RequiredModifierType modReq)
+            {
+                return false;
+            }
+
+            return modReq.ModifierType.FullName == typeof(UnmanagedType).FullName;
+        }
+
+        public static bool HasNotNullConstraint(this GenericParameter self)
+        {
+            if (self == null)
+            {
+                throw new ArgumentNullException(nameof(self));
+            }
+            return !self.HasReferenceTypeConstraint &&
+                   self.GetNullableContextStatus() == NullableStatus.NotNull;
+        }
+
+        public static bool HasStructConstraint(this GenericParameter self)
+        {
+            if (self == null)
+            {
+                throw new ArgumentNullException(nameof(self));
+            }
+            return self.Constraints.Any(HasStructConstraint);
+        }
+
+        public static bool HasStructConstraint(this GenericParameterConstraint self)
+        {
+            if (self == null)
+            {
+                throw new ArgumentNullException(nameof(self));
+            }
+            return self.ConstraintType.FullName == typeof(ValueType).FullName;
+        }
+
+        public static bool HasBaseTypeConstraint(this GenericParameter self)
+        {
+            if (self == null)
+            {
+                throw new ArgumentNullException(nameof(self));
+            }
+            return self.GetBaseTypeConstraints().Any();
+        }
+
+        public static IEnumerable<GenericParameterConstraint> GetBaseTypeConstraints(this GenericParameter self)
+        {
+            if (self == null)
+            {
+                throw new ArgumentNullException(nameof(self));
+            }
+            return self.Constraints.Where(v => !v.HasStructConstraint() && !v.HasUnmanagedConstraint() && v.GetNullableStatus() != NullableStatus.Nullable);
+        }
+
+        public static bool HasBaseTypeNullableConstraint(this GenericParameter self)
+        {
+            if (self == null)
+            {
+                throw new ArgumentNullException(nameof(self));
+            }
+            return self.GetBaseTypeNullableConstraints().Any();
+        }
+
+        public static IEnumerable<GenericParameterConstraint> GetBaseTypeNullableConstraints(this GenericParameter self)
+        {
+            if (self == null)
+            {
+                throw new ArgumentNullException(nameof(self));
+            }
+            return self.Constraints.Where(v => !v.HasStructConstraint() && !v.HasUnmanagedConstraint() && v.GetNullableStatus() == NullableStatus.Nullable);
+        }
+
+        public static NullableStatus GetNullableContextStatus(this GenericParameter self)
+        {
+            if (self == null)
+            {
+                throw new ArgumentNullException(nameof(self));
+            }
+            if (self.Owner is not Mono.Cecil.ICustomAttributeProvider owner)
+            {
+                return NullableStatus.None;
+            }
+
+            var attr = owner.GetAttribute("System.Runtime.CompilerServices.NullableContextAttribute");
+            if (attr == null || !attr.ConstructorArguments.Any())
+            {
+                return NullableStatus.None;
+            }
+
+            var arg = attr.ConstructorArguments[0].Value;
+            if (arg is byte b)
+            {
+                return (NullableStatus)b;
+            }
+
+            return NullableStatus.None;
+        }
+
+        public static NullableStatus GetNullableStatus(this GenericParameterConstraint self)
+        {
+            if (self == null)
+            {
+                throw new ArgumentNullException(nameof(self));
+            }
+            var attr = self.GetAttribute("System.Runtime.CompilerServices.NullableAttribute");
+            if (attr == null || !attr.ConstructorArguments.Any())
+            {
+                return NullableStatus.None;
+            }
+
+            var arg = attr.ConstructorArguments[0].Value;
+            if (arg is byte b)
+            {
+                return (NullableStatus)b;
+            }
+
+            return NullableStatus.None;
+        }
+
+        public static bool IsBoxingRequired(this TypeReference srcRef, TypeReference dstRef)
+        {
+            if (srcRef == null)
+            {
+                throw new ArgumentNullException(nameof(srcRef));
+            }
+            if (dstRef == null)
+            {
+                throw new ArgumentNullException(nameof(dstRef));
+            }
+
+            if (srcRef.IsByReference || srcRef.IsPointer || srcRef.IsFunctionPointer)
+            {
+                return false;
+            }
+
+            if (srcRef.IsGenericParameter)
+            {
+                if (dstRef.IsGenericParameter)
+                {
+                    return false;
+                }
+
+                if (dstRef.FullName == typeof(object).FullName ||
+                    dstRef.FullName == typeof(ValueType).FullName)
+                {
+                    return true;
+                }
+
+                var dst = dstRef.Resolve();
+                if (dst == null)
+                {
+                    Log($"unable to resolve type reference: {dstRef.FullName}");
+                    return true;
+                }
+
+                if (dst.IsInterface)
+                {
+                    return true;
+                }
+            }
+
+            bool srcIsValueType = false;
+            if (srcRef.IsArray)
+            {
+                srcIsValueType = false;
+            }
+            else
+            {
+                srcIsValueType = srcRef.Resolve().IsValueType;
+            }
+
+            bool dstIsValueType = false;
+            if (dstRef.IsArray)
+            {
+                dstIsValueType = false;
+            }
+            else if (dstRef.IsGenericParameter)
+            {
+                dstIsValueType = srcIsValueType;
+            }
+            else
+            {
+                dstIsValueType = dstRef.Resolve().IsValueType;
+            }
+
+            return srcIsValueType && !dstIsValueType;
+        }
+
+        public static bool IsCompatible(this TypeReference src, TypeReference dst)
+        {
+            if (src == null)
+            {
+                throw new ArgumentNullException(nameof(src));
+            }
+            if (dst == null)
+            {
+                throw new ArgumentNullException(nameof(dst));
+            }
+
+            if (dst is GenericParameter genericDst)
+            {
+                if (src.IsNullable())
+                {
+                    return false;
+                }
+
+                return src.IsCompatibleConstraint(genericDst);
+            }
+
+            if (src is GenericParameter genericSrc)
+            {
+                var srces = genericSrc.Constraints.Select(v => v.ConstraintType);
+                if (!srces.Any())
+                {
+                    return dst.FullName == typeof(object).FullName;
+                }
+
+                return srces.Any(v => v.IsCompatible(dst));
+            }
+
+            if (src.Is(dst))
+            {
+                return true;
+            }
+
+            if (src is GenericInstanceType genericInstanceSrc &&
+                dst is GenericInstanceType genericInstanceDst)
+            {
+                var srcDef = genericInstanceSrc.ElementType;
+                var dstDef = genericInstanceDst.ElementType;
+                if (srcDef.Is(dstDef))
+                {
+                    for (int i = 0; i < genericInstanceSrc.GenericArguments.Count; ++i)
+                    {
+                        var srcGenArg = genericInstanceSrc.GenericArguments[i];
+                        var dstGenArg = genericInstanceDst.GenericArguments[i];
+                        var dstGenParam = dstDef.Resolve().GenericParameters[i];
+                        var isSrcStruct = srcGenArg.IsStruct();
+                        if (dstGenArg is GenericParameter ||
+                            (!isSrcStruct && dstGenParam.IsCovariant))
+                        {
+                            // ‹¤•Ï«‚Ì•]‰¿
+                            if (!srcGenArg.IsCompatible(dstGenArg))
+                            {
+                                return false;
+                            }
+                        }
+                        else if (!isSrcStruct && dstGenParam.IsContravariant)
+                        {
+                            // ”½•Ï«‚Ì•]‰¿
+                            if (!dstGenArg.IsCompatible(srcGenArg))
+                            {
+                                return false;
+                            }
+                        }
+                        else
+                        {
+                            // •s•Ï«‚Ì•]‰¿
+                            if (!srcGenArg.Is(dstGenArg))
+                            {
+                                return false;
+                            }
+                        }
+                    }
+
+                    return true;
+                }
+            }
+
+            if (src is FunctionPointerType &&
+                dst is FunctionPointerType)
+            {
+                // ‚±‚ÌŽž“_‚Å“¯ˆê‚Å‚Í‚È‚¢‚Ì‚Å•s“K‡
+                return false;
+            }
+
+            if (src is ArrayType arrayTypeSrc &&
+                dst is ArrayType arrayTypeDst)
+            {
+                if (arrayTypeSrc.Rank != arrayTypeDst.Rank)
+                {
+                    return false;
+                }
+
+                // ”z—ñ‚Í‹¤•Ï‘Š“–
+                return arrayTypeSrc.ElementType.IsCompatible(arrayTypeDst.ElementType);
+            }
+
+            if (src is TypeSpecification specTypeSrc &&
+                dst is TypeSpecification specTypeDst &&
+                specTypeSrc.GetType() == specTypeDst.GetType())
+            {
+                // Generic‚¾‚¯‚ÍŽó‚¯“ü‚ê‚é
+                if (specTypeDst.ElementType is GenericParameter)
+                {
+                    return specTypeSrc.ElementType.IsCompatible(specTypeDst.ElementType);
+                }
+
+                return specTypeSrc.ElementType.Is(specTypeDst.ElementType);
+            }
+
+            using (ThreadStaticListPool<TypeReference>.Get(out var baseTypes))
+            {
+                src.GetBaseTypeAndInterfaces(baseTypes);
+                foreach (var baseType in baseTypes)
+                {
+                    if (baseType.IsCompatible(dst))
+                    {
+                        return true;
+                    }
+                }
+            }
+
+            return false;
+        }
+
+        public static bool IsCompatibleToByReference(this TypeReference src, ByReferenceType dstByRef)
+        {
+            if (src == null)
+            {
+                throw new ArgumentNullException(nameof(src));
+            }
+            if (dstByRef == null)
+            {
+                throw new ArgumentNullException(nameof(dstByRef));
+            }
+
+            return src.IsCompatibleWithoutBase(dstByRef.ElementType);
+        }
+
+        public static bool IsCompatibleWithoutBase(this TypeReference src, TypeReference dst)
+        {
+            if (src == null)
+            {
+                throw new ArgumentNullException(nameof(src));
+            }
+            if (dst == null)
+            {
+                throw new ArgumentNullException(nameof(dst));
+            }
+
+            if (dst is GenericParameter genericDst)
+            {
+                if (src.IsNullable())
+                {
+                    return false;
+                }
+
+                return src.IsCompatibleConstraint(genericDst);
+            }
+
+            if (src.Is(dst))
+            {
+                return true;
+            }
+
+            if (src is GenericInstanceType genericInstanceSrc &&
+                dst is GenericInstanceType genericInstanceDst)
+            {
+                var srcDef = genericInstanceSrc.ElementType;
+                var dstDef = genericInstanceDst.ElementType;
+                if (srcDef.Is(dstDef))
+                {
+                    for (int i = 0; i < genericInstanceSrc.GenericArguments.Count; ++i)
+                    {
+                        var srcGenArg = genericInstanceSrc.GenericArguments[i];
+                        var dstGenArg = genericInstanceDst.GenericArguments[i];
+
+                        // Generic‚¾‚¯‚ÍŽó‚¯“ü‚ê‚é
+                        if (dstGenArg is GenericParameter)
+                        {
+                            if (!srcGenArg.IsCompatibleWithoutBase(dstGenArg))
+                            {
+                                return false;
+                            }
+                        }
+                        else
+                        {
+                            if (!srcGenArg.Is(dstGenArg))
+                            {
+                                return false;
+                            }
+                        }
+                    }
+
+                    return true;
+                }
+            }
+
+            if (src is FunctionPointerType &&
+                dst is FunctionPointerType)
+            {
+                // ‚±‚ÌŽž“_‚Å“¯ˆê‚Å‚Í‚È‚¢‚Ì‚Å•s“K‡
+                return false;
+            }
+
+            if (src is ArrayType arrayTypeSrc &&
+                dst is ArrayType arrayTypeDst)
+            {
+                if (arrayTypeSrc.Rank != arrayTypeDst.Rank)
+                {
+                    return false;
+                }
+
+                // Generic‚¾‚¯‚ÍŽó‚¯“ü‚ê‚é
+                if (arrayTypeDst.ElementType is GenericParameter)
+                {
+                    return arrayTypeSrc.ElementType.IsCompatibleWithoutBase(arrayTypeDst.ElementType);
+                }
+
+                return arrayTypeSrc.ElementType.Is(arrayTypeDst.ElementType);
+            }
+
+            if (src is TypeSpecification specTypeSrc &&
+                dst is TypeSpecification specTypeDst &&
+                specTypeSrc.GetType() == specTypeDst.GetType())
+            {
+                // Generic‚¾‚¯‚ÍŽó‚¯“ü‚ê‚é
+                if (specTypeDst.ElementType is GenericParameter)
+                {
+                    return specTypeSrc.ElementType.IsCompatibleWithoutBase(specTypeDst.ElementType);
+                }
+
+                return specTypeDst.ElementType.Is(specTypeDst.ElementType);
+            }
+
+            return false;
+        }
+
+
+        public static bool IsCompatibleConstraint(this TypeReference src, GenericParameter dst)
+        {
+            if (src == null)
+            {
+                throw new ArgumentNullException(nameof(src));
+            }
+
+            if (dst == null)
+            {
+                throw new ArgumentNullException(nameof(dst));
+            }
+
+            // new()
+            if (dst.HasNewConstraint() && !src.IsCompatibleNewConstraint())
+            {
+                return false;
+            }
+
+            // class
+            if (dst.HasClassConstraint() && !src.IsCompatibleClassConstraint())
+            {
+                return false;
+            }
+
+            // class?
+            if (dst.HasClassNullableConstraint() && !src.IsCompatibleClassNullableConstraint())
+            {
+                return false;
+            }
+
+            // unmanaged
+            if (dst.HasUnmanagedConstraint() && !src.IsCompatibleUnmanagedConstraint())
+            {
+                return false;
+            }
+
+            // notnull
+            if (dst.HasNotNullConstraint() && !src.IsCompatibleNotNullConstraint())
+            {
+                return false;
+            }
+
+            // struct
+            if (dst.HasStructConstraint() && !src.IsCompatibleStructConstraint())
+            {
+                return false;
+            }
+
+            // Œ^§–ñ
+            if (dst.HasBaseTypeConstraint() && !src.IsCompatibleBaseTypeConstraint(dst))
+            {
+                return false;
+            }
+
+            // Œ^?§–ñ
+            if (dst.HasBaseTypeNullableConstraint() && !dst.IsCompatibleBaseTypeNullableConstraint(dst))
+            {
+                return false;
+            }
+
+            return true;
+        }
+
+        public static bool IsCompatibleNewConstraint(this TypeReference src)
+        {
+            if (src == null)
+            {
+                throw new ArgumentNullException(nameof(src));
+            }
+
+            if (src.IsStaticType())
+            {
+                return false;
+            }
+
+            if (src is GenericParameter srcGenericParameter)
+            {
+                // OK: new() -> new()
+                // OK: unmanaged -> new()
+                // OK: struct -> new()
+                if (srcGenericParameter.HasNewConstraint() ||
+                    srcGenericParameter.HasUnmanagedConstraint() ||
+                    srcGenericParameter.HasStructConstraint() ||
+                    srcGenericParameter.GetBaseTypeConstraints().Any(srcConstraint =>
+                    {
+                        if (srcConstraint.ConstraintType is not GenericParameter)
+                        {
+                            return false;
+                        }
+
+                        return srcConstraint.ConstraintType.IsCompatibleNewConstraint();
+                    }))
+                {
+                    return true;
+                }
+
+                return false;
+            }
+
+            return src.HasDefaultConstructor();
+        }
+
+        public static bool IsCompatibleClassConstraint(this TypeReference src)
+        {
+            if (src == null)
+            {
+                throw new ArgumentNullException(nameof(src));
+            }
+
+            if (src.IsStaticType())
+            {
+                return false;
+            }
+
+            if (src is GenericParameter srcGenericParameter)
+            {
+                // OK: class -> class
+                if (srcGenericParameter.HasClassConstraint() ||
+                    srcGenericParameter.GetBaseTypeConstraints().Any(srcConstraint => srcConstraint.ConstraintType.IsCompatibleClassConstraint()))
+                {
+                    return true;
+                }
+
+                return false;
+            }
+
+            return src.IsClass();
+        }
+
+        public static bool IsCompatibleClassNullableConstraint(this TypeReference src)
+        {
+            if (src == null)
+            {
+                throw new ArgumentNullException(nameof(src));
+            }
+            if (src.IsStaticType())
+            {
+                return false;
+            }
+
+            if (src is GenericParameter srcGenericParameter)
+            {
+                // OK: class -> class?
+                // OK: class? -> class?
+                if (srcGenericParameter.HasClassConstraint() ||
+                    srcGenericParameter.HasClassNullableConstraint() ||
+                    srcGenericParameter.GetBaseTypeConstraints().Any(srcConstraint => srcConstraint.ConstraintType.IsCompatibleClassNullableConstraint()) ||
+                    srcGenericParameter.GetBaseTypeNullableConstraints().Any(srcConstraint => srcConstraint.ConstraintType.IsCompatibleClassNullableConstraint()))
+                {
+                    return true;
+                }
+
+                return false;
+            }
+
+            return src.IsClass();
+        }
+
+        public static bool IsCompatibleUnmanagedConstraint(this TypeReference src)
+        {
+            if (src == null)
+            {
+                throw new ArgumentNullException(nameof(src));
+            }
+
+            if (src.IsStaticType())
+            {
+                return false;
+            }
+
+            if (src is GenericParameter srcGenericParameter)
+            {
+                // OK: unmanaged -> unmanaged
+                if (srcGenericParameter.HasUnmanagedConstraint() ||
+                    srcGenericParameter.GetBaseTypeConstraints().Any(srcConstraint =>
+                    {
+                        if (srcConstraint.ConstraintType is not GenericParameter)
+                        {
+                            return false;
+                        }
+
+                        return srcConstraint.ConstraintType.IsCompatibleUnmanagedConstraint();
+                    }))
+                {
+                    return true;
+                }
+
+                return false;
+            }
+
+            return src.IsUnmanaged();
+        }
+
+        public static bool IsCompatibleNotNullConstraint(this TypeReference src)
+        {
+            if (src == null)
+            {
+                throw new ArgumentNullException(nameof(src));
+            }
+
+            if (src.IsStaticType())
+            {
+                return false;
+            }
+
+            if (src is GenericParameter srcGenericParameter)
+            {
+                // OK: class -> notnull
+                // OK: notnull -> notnoll
+                // OK: unmanaged -> notnull
+                // OK: struct -> notnull
+                if (srcGenericParameter.HasClassConstraint() ||
+                    srcGenericParameter.HasUnmanagedConstraint() ||
+                    srcGenericParameter.HasNotNullConstraint() ||
+                    srcGenericParameter.HasStructConstraint() ||
+                    srcGenericParameter.GetBaseTypeConstraints().Any(srcConstraint => srcConstraint.ConstraintType.IsCompatibleNotNullConstraint()))
+                {
+                    return true;
+                }
+
+                return false;
+            }
+
+            return true;
+        }
+
+        public static bool IsCompatibleStructConstraint(this TypeReference src)
+        {
+            if (src == null)
+            {
+                throw new ArgumentNullException(nameof(src));
+            }
+            if (src.IsStaticType())
+            {
+                return false;
+            }
+            if (src is GenericParameter srcGenericParameter)
+            {
+                // OK: struct -> struct
+                // OK: unmanaged -> struct
+                if (srcGenericParameter.HasStructConstraint() ||
+                    srcGenericParameter.HasUnmanagedConstraint() ||
+                    srcGenericParameter.GetBaseTypeConstraints().Any(srcConstraint =>
+                    {
+                        if (srcConstraint.ConstraintType is not GenericParameter)
+                        {
+                            return false;
+                        }
+
+                        return srcConstraint.ConstraintType.IsCompatibleStructConstraint();
+                    }))
+                {
+                    return true;
+                }
+                return false;
+            }
+            return src.IsStruct();
+        }
+
+        public static bool IsCompatibleBaseTypeConstraint(this TypeReference src, GenericParameter dst)
+        {
+            if (src == null)
+            {
+                throw new ArgumentNullException(nameof(src));
+            }
+            if (dst == null)
+            {
+                throw new ArgumentNullException(nameof(dst));
+            }
+
+            if (src.IsStaticType())
+            {
+                return false;
+            }
+
+            return dst.GetBaseTypeConstraints().All(dstConstraint => src.IsCompatible(dstConstraint.ConstraintType));
+        }
+
+        public static bool IsCompatibleBaseTypeNullableConstraint(this TypeReference src, GenericParameter dst)
+        {
+            if (src == null)
+            {
+                throw new ArgumentNullException(nameof(src));
+            }
+            if (dst == null)
+            {
+                throw new ArgumentNullException(nameof(dst));
+            }
+
+            if (src.IsStaticType())
+            {
+                return false;
+            }
+
+            return dst.GetBaseTypeNullableConstraints().All(dstConstraint => src.IsCompatible(dstConstraint.ConstraintType));
         }
 
         public static void CreateTypeParameters(ModuleDefinition module, TypeReference typeRef, Dictionary<GenericParameter, TypeReference> typeParameter)
